@@ -19,19 +19,19 @@ let network       = null; // Vis.js network instance
 async function init() {
   console.log("Iniciando la aplicación...");
   try {
-    // 1. Cargar configuración básica
-    await loadConfig();
-    
-    // 2. Cargar listas de opciones
+    // 1. Poblar selectores (vaults, modelos, status de Ollama) en paralelo
     await Promise.allSettled([
       checkOllama(),
       loadModels(),
       loadVaults(),
     ]);
 
-    // 3. Una vez poblado el selector de vaults, cargar las estadísticas del vault activo
+    // 2. Ahora que los selectores tienen opciones, aplicar la config guardada
+    await loadConfig();
+
+    // 3. Con el vault correcto seleccionado, cargar estadísticas
     await loadVaultStats();
-    
+
     setInterval(checkOllama, 15000);
   } catch (e) {
     console.error("Error durante la inicialización:", e);
@@ -66,12 +66,11 @@ async function checkOllama() {
 async function loadVaults() {
   const sel = document.getElementById('vault-path');
   if (!sel) return;
-  const currentVal = sel.value; // Guardar lo que ya esté puesto por loadConfig
 
   try {
     const r = await fetch(`${API}/vaults`);
     const d = await r.json();
-    
+
     if (d.vaults && d.vaults.length > 0) {
       sel.innerHTML = '';
       d.vaults.forEach(v => {
@@ -80,23 +79,8 @@ async function loadVaults() {
         opt.textContent = `${v.name} (${v.path})`;
         sel.appendChild(opt);
       });
-
-      // Restaurar el valor guardado si existe en la nueva lista
-      if (currentVal) {
-        let exists = false;
-        for (let i=0; i<sel.options.length; i++) {
-          if (sel.options[i].value === currentVal) { exists = true; break; }
-        }
-        if (!exists) {
-          const opt = document.createElement('option');
-          opt.value = currentVal;
-          opt.textContent = `Guardado: ${currentVal}`;
-          sel.appendChild(opt);
-        }
-        sel.value = currentVal;
-      }
     } else {
-      if (!currentVal) sel.innerHTML = '<option value="">No se encontraron vaults</option>';
+      sel.innerHTML = '<option value="">No se encontraron vaults</option>';
     }
   } catch (e) {
     console.warn("Error cargando vaults:", e);
@@ -135,7 +119,6 @@ async function loadModels() {
     sel.innerHTML = '<option>Error al cargar modelos</option>';
   }
 }
-// ─── CONFIG ─────────────────────────────────────────────
 // ─── CONFIG ─────────────────────────────────────────────
 async function loadConfig() {
   try {
@@ -490,10 +473,7 @@ function escapeHtml(text) {
 function renderChatText(text) {
   const blocks = [];
   const save   = m => { blocks.push(m); return `\x00M${blocks.length - 1}\x00`; };
-  // Limpieza agresiva de filtraciones JSON o headers internos
   let safe = text
-    .replace(/Respuesta:\s*\}*/gi, '')
-    .replace(/\}[\s\n]*$/g, '') 
     .replace(/\$\$[\s\S]+?\$\$/g,    save)   // display math $$...$$
     .replace(/\\\[[\s\S]+?\\\]/g,    save)   // display math \[...\]
     .replace(/\$[^$\n]+?\$/g,        save)   // inline math $...$

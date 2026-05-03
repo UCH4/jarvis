@@ -365,83 +365,131 @@ Prioridad: Vault > Herramientas > Conocimiento General. (M4 Pro Neural Engine Mo
                     "tools": active_tools if active_tools else None,
                     "stream":  False,
                     "options": {
-                        "temperature": 0.1, 
-                        "num_ctx": 32768, # M4 Pro power
-                        "num_thread": 10,  # Aprovechar núcleos Performance
-                        "cache_prompt": config.get("prefix_cache", True) # Optimización masiva
+                        "temperature": 0.1,
+                        "num_ctx": 32768,
+                        "num_thread": 10,
+                        "cache_prompt": config.get("prefix_cache", True)
                     },
                 },
                 timeout=300
             )
-            
+
             if r.status_code != 200:
                 err_msg = r.json().get("error", f"HTTP {r.status_code}")
-                yield json.dumps({"type": "error", "content": f"Fallo en Ollama: {err_msg}. Sugerencia: El modelo '{m}' podría no soportar herramientas (Tool Calling). Probá con llama3.1 o qwen2.5 para funciones de búsqueda/terminal."}) + "\n"
+                yield json.dumps({"type": "error", "content": f"Fallo en Ollama: {err_msg}. Sugerencia: El modelo '{m}' podría no soportar herramientas. Probá con llama3.1 o qwen2.5."}) + "\n"
                 break
 
             response_data = r.json()
             message = response_data.get("message", {})
             messages.append(message)
 
-            # Si la IA respondió con texto ADEMÁS de la tool call (o en lugar de), lo mostramos
+            # ── Procesar contenido de texto ──
             content = message.get("content", "")
-            if content:
-                # Filtrar SOLAMENTE bloques que son claramente JSON de herramientas (contienen "name" y llaves)
-                clean_content = re.sub(r'\{[^{}]*?"name"[^{}]*?\}', '', content)
-                
-                # Eliminar el prefijo "Respuesta:" solo si está al principio y seguido de llaves
-                clean_content = re.sub(r'^Respuesta:?\s*\{', '', clean_content, flags=re.I).strip()
-                
-                # Quitar llaves de cierre que queden huérfanas al final de la respuesta
-                if clean_content.count('{') < clean_content.count('}'):
-                    clean_content = clean_content.rstrip('}').strip()
+            tool_calls = message.get("tool_calls") or []
 
+            # FALLBACK TOOL PARSER: Si el modelo escribió un tool call en el texto
+            # en vez de usar el canal tool_calls (bug conocido de Llama 3.1),
+            # lo detectamos, lo parseamos y lo ejecutamos como si fuera real.
+            if content and not tool_calls and '{' in content and '"name"' in content:
+                parsed_tc = _try_parse_tool_from_text(content)
+                if parsed_tc:
+                    tool_calls = [parsed_tc]
+                    # Extraer el texto humano que hay ANTES del JSON
+                    json_start = content.find('{')
+                    human_text = content[:json_start].strip()
+                    if human_text:
+                        full_answer += human_text + " "
+                        yield json.dumps({"type": "chunk", "content": human_text}) + "\n"
+                    content = ""  # Ya procesamos todo
+
+            # Mostrar texto humano (si hay y no fue consumido por el fallback)
+            if content:
+                clean_content = content.strip()
                 if clean_content:
                     full_answer += clean_content + " "
                     yield json.dumps({"type": "chunk", "content": clean_content}) + "\n"
 
-            if "tool_calls" in message and message["tool_calls"]:
-                # Avisar al frontend que estamos usando herramientas
-                for tc in message["tool_calls"]:
+            # ── Procesar tool calls (reales o parseadas del fallback) ──
+            if tool_calls:
+                for tc in tool_calls:
                     func_name = tc.get("function", {}).get("name")
                     args = tc.get("function", {}).get("arguments", {})
 
                     if func_name == "execute_mac_command":
-                        # PEDIR APROBACIÓN AL USUARIO
                         yield json.dumps({"type": "terminal_approval", "command": args.get("command", ""), "tool_call_id": tc.get("id")}) + "\n"
-                        # No ejecutamos nada aún, el frontend debe re-enviar la aprobación.
                         return
 
                     if func_name == "search_internet":
                         query = args.get("query", "")
-                        # Optimización para M4 Pro: Convertir pregunta larga en keywords para DDG Lite
                         words = query.split()
                         if len(words) > 5:
                             stop_words = {"que", "es", "el", "la", "de", "un", "una", "en", "sobre", "para", "como", "son", "los", "las"}
                             keywords = [w for w in words if w.lower() not in stop_words]
                             args["query"] = " ".join(keywords[:5])
-                    
+
                     yield json.dumps({"type": "chunk", "content": f"\n\n*🤖 Jarvis está utilizando la herramienta: `{func_name}`...*\n\n"}) + "\n"
-                    
-                    # Ejecutar herramienta (para search o read_file, que son seguras)
+
                     result = execute_tool(tc)
-                    
-                    # Agregar el resultado al historial
+
                     messages.append({
                         "role": "tool",
                         "content": result,
-                        "tool_call_id": tc.get("id") # Importante para modelos que lo requieren
+                        "tool_call_id": tc.get("id")
                     })
-                # Volver a iterar para que la IA lea el resultado de la herramienta
+                # Volver a iterar para que la IA lea el resultado
             else:
-                # No hay tool calls, la IA terminó o respondió solo con texto.
+                # No hay tool calls → la IA terminó
                 if full_answer:
                     from core.memory import save_chat_message
                     save_chat_message("assistant", full_answer.strip(), mode, vault_path)
                 break
-        
+
         yield json.dumps({"type": "done"}) + "\n"
 
     except Exception as e:
         import json
         yield json.dumps({"type": "error", "content": f"Error al conectar con Ollama o ejecutar herramienta: {e}"}) + "\n"
+
+
+def _try_parse_tool_from_text(text: str) -> dict:
+    """Fallback parser: detecta tool calls que Llama 3.1 filtró al texto.
+    
+    Busca un bloque JSON balanceado que contenga 'name' y 'parameters',
+    y lo convierte a la estructura estándar de tool_call de Ollama.
+    Retorna None si no encuentra nada válido.
+    """
+    try:
+        start = text.find('{')
+        if start == -1:
+            return None
+        
+        # Encontrar el bloque balanceado
+        count = 0
+        end = -1
+        for i in range(start, len(text)):
+            if text[i] == '{':
+                count += 1
+            elif text[i] == '}':
+                count -= 1
+            if count == 0:
+                end = i + 1
+                break
+        
+        if end == -1:
+            return None
+        
+        block = text[start:end]
+        parsed = json.loads(block)
+        
+        # Verificar que parece un tool call
+        if "name" in parsed:
+            return {
+                "function": {
+                    "name": parsed["name"],
+                    "arguments": parsed.get("parameters", parsed.get("arguments", {}))
+                },
+                "id": "fallback_tc_0"
+            }
+    except (json.JSONDecodeError, KeyError, TypeError):
+        pass
+    return None
