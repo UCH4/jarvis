@@ -12,20 +12,27 @@ const API = window.location.port
 let pollInterval  = null;
 let lastLogLen    = 0;
 let currentStatus = 'idle';
+let network       = null; // Vis.js network instance
 
 // ─── INIT ─────────────────────────────────────────────
 // Cada función es independiente: si una falla no bloquea las demás
 async function init() {
   console.log("Iniciando la aplicación...");
   try {
+    // 1. Cargar configuración básica
+    await loadConfig();
+    
+    // 2. Cargar listas de opciones
     await Promise.allSettled([
       checkOllama(),
       loadModels(),
       loadVaults(),
-      loadConfig(),
-      loadVaultStats(),
     ]);
-    setInterval(checkOllama, 10000);
+
+    // 3. Una vez poblado el selector de vaults, cargar las estadísticas del vault activo
+    await loadVaultStats();
+    
+    setInterval(checkOllama, 15000);
   } catch (e) {
     console.error("Error durante la inicialización:", e);
   }
@@ -89,16 +96,20 @@ async function loadModels() {
     console.log("Respuesta de /api/models:", d); // Log para depuración
     const sel = document.getElementById('model-select');
     const sSel = document.getElementById('s-model');
+    const scSel = document.getElementById('s-chat-model');
     sel.innerHTML = '';
     sSel.innerHTML = '';
+    scSel.innerHTML = '';
     if (d.models && d.models.length > 0) {
       d.models.forEach(m => {
         const opt = `<option value="${m}">${m}</option>`;
         sel.innerHTML += opt;
         sSel.innerHTML += opt;
+        scSel.innerHTML += opt;
       });
     } else {
       sel.innerHTML = '<option>sin modelos</option>';
+      scSel.innerHTML = '<option>sin modelos</option>';
     }
   } catch (e) {
     console.error("Error al cargar modelos:", e);
@@ -115,7 +126,22 @@ async function loadConfig() {
     
     // Configuración de rutas
     if (d.scan_path) document.getElementById('scan-path').value = d.scan_path;
-    if (d.vault_path) document.getElementById('vault-path').value = d.vault_path;
+    if (d.vault_path) {
+      const vSel = document.getElementById('vault-path');
+      // Si el vault no está en la lista (porque loadVaults no terminó o no está en obsidian.json)
+      // lo agregamos temporalmente para que el valor sea válido.
+      let exists = false;
+      for (let i=0; i<vSel.options.length; i++) {
+        if (vSel.options[i].value === d.vault_path) { exists = true; break; }
+      }
+      if (!exists) {
+        const opt = document.createElement('option');
+        opt.value = d.vault_path;
+        opt.textContent = `Guardado: ${d.vault_path}`;
+        vSel.appendChild(opt);
+      }
+      vSel.value = d.vault_path;
+    }
     
     // Configuración persistente (IA y Watcher)
     if (d.user_config) {
@@ -123,8 +149,12 @@ async function loadConfig() {
       if (document.getElementById('s-auto-sync'))   document.getElementById('s-auto-sync').checked   = u.auto_sync;
       if (document.getElementById('s-tool-search')) document.getElementById('s-tool-search').checked = u.tools_search;
       if (document.getElementById('s-tool-command')) document.getElementById('s-tool-command').checked = u.tools_command;
+      if (document.getElementById('s-prefix-cache')) document.getElementById('s-prefix-cache').checked = u.prefix_cache;
       if (u.analysis_model && document.getElementById('s-model')) {
         document.getElementById('s-model').value = u.analysis_model;
+      }
+      if (u.chat_model && document.getElementById('s-chat-model')) {
+        document.getElementById('s-chat-model').value = u.chat_model;
       }
       if (u.duplicate_threshold && document.getElementById('s-threshold')) {
         document.getElementById('s-threshold').value = u.duplicate_threshold;
@@ -146,7 +176,9 @@ async function saveSettings() {
       auto_sync:     document.getElementById('s-auto-sync').checked,
       tools_search:  document.getElementById('s-tool-search').checked,
       tools_command: document.getElementById('s-tool-command').checked,
+      prefix_cache:  document.getElementById('s-prefix-cache').checked,
       analysis_model: document.getElementById('s-model').value,
+      chat_model:     document.getElementById('s-chat-model').value,
       duplicate_threshold: parseFloat(document.getElementById('s-threshold').value)
     }
   };
@@ -440,7 +472,10 @@ function escapeHtml(text) {
 function renderChatText(text) {
   const blocks = [];
   const save   = m => { blocks.push(m); return `\x00M${blocks.length - 1}\x00`; };
+  // Limpieza agresiva de filtraciones JSON o headers internos
   let safe = text
+    .replace(/Respuesta:\s*\}*/gi, '')
+    .replace(/\}[\s\n]*$/g, '') 
     .replace(/\$\$[\s\S]+?\$\$/g,    save)   // display math $$...$$
     .replace(/\\\[[\s\S]+?\\\]/g,    save)   // display math \[...\]
     .replace(/\$[^$\n]+?\$/g,        save)   // inline math $...$
@@ -486,6 +521,9 @@ function appendMsg(role, text, sources = []) {
 }
 
 function appendTyping() {
+  const logo = document.querySelector('.logo-icon');
+  if (logo) logo.classList.add('neural-pulse');
+  
   const container = document.getElementById('chat-messages');
   const div = document.createElement('div');
   div.className = 'msg jarvis fade-in';
@@ -503,6 +541,9 @@ function appendTyping() {
 }
 
 function removeTyping() {
+  const logo = document.querySelector('.logo-icon');
+  if (logo) logo.classList.remove('neural-pulse');
+  
   const el = document.getElementById('typing-indicator');
   if (el) el.remove();
 }
@@ -676,6 +717,71 @@ function switchView(name, el) {
   }
   if (name === 'settings') loadNetworkInfo();
   if (name === 'chat')     document.getElementById('chat-input').focus();
+  if (name === 'grafo')    loadGraph();
+}
+
+async function loadGraph() {
+  const container = document.getElementById('knowledge-graph');
+  const vaultPath = document.getElementById('vault-path').value.trim();
+  if (!vaultPath) return;
+
+  container.innerHTML = '<div class="empty"><div class="spin">◌</div><div>Construyendo grafo...</div></div>';
+
+  try {
+    const r = await fetch(`${API}/graph?vault_path=${encodeURIComponent(vaultPath)}`);
+    const data = await r.json();
+
+    if (!data.nodes || data.nodes.length === 0) {
+      container.innerHTML = '<div class="empty"><div class="empty-icon">◈</div><div>No hay suficientes datos para el grafo</div></div>';
+      return;
+    }
+
+    container.innerHTML = '';
+    const nodes = new vis.DataSet(data.nodes);
+    const edges = new vis.DataSet(data.edges);
+
+    const options = {
+      nodes: {
+        shape: 'dot',
+        size: 16,
+        font: { size: 12, color: '#ffffff' },
+        borderWidth: 2,
+        shadow: true
+      },
+      edges: {
+        width: 1,
+        color: { inherit: 'from' },
+        smooth: { type: 'continuous' }
+      },
+      groups: {
+        note: { color: { background: '#00e5ff', border: '#008cff' } },
+        materia: { color: { background: '#a78bfa', border: '#7c3aed' } },
+        category: { color: { background: '#00ffa3', border: '#059669' } }
+      },
+      physics: {
+        stabilization: true,
+        barnesHut: { gravitationalConstant: -2000, centralGravity: 0.3, springLength: 95 }
+      },
+      interaction: { hover: true, tooltipDelay: 200 }
+    };
+
+    network = new vis.Network(container, { nodes, edges }, options);
+    
+    network.on("click", function (params) {
+      if (params.nodes.length > 0) {
+        const nodeId = params.nodes[0];
+        const node = nodes.get(nodeId);
+        if (node && node.group === 'note') {
+          console.log("Nota seleccionada:", node.title);
+          // Opcional: mostrar detalles o abrir en Obsidian
+        }
+      }
+    });
+
+  } catch (err) {
+    console.error("Error al cargar grafo:", err);
+    container.innerHTML = '<div class="empty">Error cargando el grafo de conocimiento</div>';
+  }
 }
 
 async function runVaultCleanup() {
@@ -687,7 +793,22 @@ async function runVaultCleanup() {
     btn.disabled = true;
 
     try {
-        const r = await fetch(`${API_URL}/api/cleanup`, { method: 'POST' });
+        const r = await fetch(`${API}/cleanup`, { method: 'POST' });
+        
+        if (!r.ok) {
+            const text = await r.text();
+            let errorMsg = `Error ${r.status}`;
+            try {
+                const errData = JSON.parse(text);
+                errorMsg = errData.message || errorMsg;
+            } catch (e) {
+                // Si no es JSON, mostrar un fragmento del texto o el status
+                errorMsg = `Error del servidor (${r.status}). Verificá que el servidor esté actualizado y reiniciado.`;
+            }
+            alert("Error al limpiar vault: " + errorMsg);
+            return;
+        }
+
         const data = await r.json();
         if (data.deleted && data.deleted.length > 0) {
             alert(`Limpieza terminada: ${data.deleted.length} archivos duplicados movidos a la carpeta '_Limpieza_Duplicados'.`);
@@ -695,7 +816,7 @@ async function runVaultCleanup() {
             alert("No se encontraron duplicados evidentes.");
         }
     } catch (err) {
-        alert("Error al limpiar vault: " + err);
+        alert("Error de conexión o proceso: " + err.message);
     } finally {
         btn.innerHTML = 'Limpiar Duplicados';
         btn.disabled = false;

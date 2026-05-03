@@ -21,6 +21,9 @@
 </script>
 <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js" async></script>
 
+<!-- Vis.js for Knowledge Graph -->
+<script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+
 <!-- CSS modularizado -->
 <link rel="stylesheet" href="/static/css/dashboard.css?v=3">
 </head>
@@ -59,6 +62,9 @@
     </div>
     <div class="nav-item" onclick="switchView('vault', this)">
       <span class="nav-item-icon">◈</span> Mi Vault
+    </div>
+    <div class="nav-item" onclick="switchView('grafo', this)">
+      <span class="nav-item-icon">🕸</span> Grafo
     </div>
     <div class="nav-item" onclick="switchView('settings', this)">
       <span class="nav-item-icon">⊹</span> Configuración
@@ -192,6 +198,19 @@
     </div>
   </div>
 
+  <!-- GRAFO VIEW -->
+  <div class="view" id="view-grafo" style="height: calc(100vh - 120px); position: relative;">
+    <div class="card" style="height: 100%; display: flex; flex-direction: column; padding: 0; overflow: hidden;">
+      <div class="card-title" style="padding: 20px 20px 10px;">Grafo de Conocimiento Académico</div>
+      <div id="knowledge-graph" style="flex: 1; width: 100%; background: var(--bg);"></div>
+      <div class="graph-legend" style="padding: 10px 20px; font-size: 11px; color: var(--text3); border-top: 1px solid var(--border); display: flex; gap: 20px;">
+        <span><span style="color:var(--cyan)">●</span> Notas</span>
+        <span><span style="color:var(--purple)">●</span> Materias</span>
+        <span><span style="color:var(--amber)">●</span> Conceptos</span>
+      </div>
+    </div>
+  </div>
+
   <!-- SETTINGS VIEW -->
   <div class="view" id="view-settings">
     <div class="card">
@@ -226,6 +245,23 @@
             <input type="checkbox" id="s-tool-command">
             <span class="slider"></span>
           </label>
+        </div>
+        <div class="setting-item">
+          <div class="setting-info">
+            <div class="setting-name">Prefix Caching (Ollama)</div>
+            <div class="setting-desc">Mantiene el contexto en memoria para respuestas más rápidas.</div>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="s-prefix-cache">
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="setting-item">
+          <div class="setting-info">
+            <div class="setting-name">Modelo de Chat (IA Interna)</div>
+            <div class="setting-desc">Modelo para razonamiento y tutoría. Recomendado: DeepSeek-R1.</div>
+          </div>
+          <select id="s-chat-model" class="model-select" style="max-width:200px;"></select>
         </div>
         <div class="setting-item">
           <div class="setting-info">
@@ -314,6 +350,21 @@
 </div>
 
 </div><!-- /.app -->
+
+<!-- ─── FOOTER (SYSTEM STATUS) ─── -->
+<footer style="position:fixed;bottom:0;left:0;right:0;height:24px;background:var(--bg2);border-top:1px solid var(--border);display:flex;align-items:center;padding:0 12px;gap:16px;z-index:100;font-family:var(--mono);font-size:9px;color:var(--text3);text-transform:uppercase;">
+  <div style="display:flex;align-items:center;gap:6px;">
+    <span style="color:var(--cyan)">System:</span> <span id="sys-status">M4 Pro Neural Engine</span>
+  </div>
+  <div style="display:flex;align-items:center;gap:6px;">
+    <span style="color:var(--purple)">Memory:</span> <span id="sys-mem">24GB Unified</span>
+  </div>
+  <div style="display:flex;align-items:center;gap:6px;">
+    <span style="color:var(--green)">Ollama:</span> <span id="ollama-ver">Online</span>
+  </div>
+  <div style="flex:1"></div>
+  <div style="color:var(--text3)">Jarvis Protocol v4.0.1</div>
+</footer>
 
 <!-- MODAL DE TERMINAL -->
 <div id="terminal-modal" class="modal">

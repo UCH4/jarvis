@@ -268,7 +268,7 @@ def _fallback_analysis() -> dict:
 
 def chat_con_vault(question: str, vault_path: str, model: str = None, mode: str = "normal") -> dict:
     from core.rag import buscar_en_vault
-    from core.professor import SOCRATIC_SYSTEM_PROMPT
+    from agents.professor import SOCRATIC_SYSTEM_PROMPT
     
     m    = model or ANALYSIS_MODEL
     docs = buscar_en_vault(question, vault_path, top_k=5)
@@ -291,9 +291,9 @@ DIRECTIVAS MAESTRAS DE RAZONAMIENTO:
 2. HERRAMIENTAS (ULTRA-PRECISIÓN): Solo usá 'search_internet' si el Vault no tiene la información. Solo usá 'execute_mac_command' si necesitás datos técnicos del sistema o archivos específicos.
 3. PROHIBIDO ALUCINAR: Si no sabés algo y no está en el Vault, buscalo o preguntale al usuario. Nunca inventes rutas de archivos.
 4. ESTILO: Profesional, conciso y académico. Usá LaTeX ($...$) para matemáticas.
-5. CERO JSON: Nunca muestres código JSON en el chat. La comunicación con las herramientas debe ser invisible para el usuario.
+5. SILENCIO JSON TOTAL: Nunca, bajo ninguna circunstancia, escribas llaves { } o etiquetas "Respuesta:" en el chat. Tu salida debe ser puro texto legible o Markdown. Si usas herramientas, hazlo en silencio.
 
-Prioridad: Vault > Herramientas > Conocimiento General."""
+Prioridad: Vault > Herramientas > Conocimiento General. (M4 Pro Neural Engine Mode)"""
 
     if mode == "professor":
         prompt_system = SOCRATIC_SYSTEM_PROMPT
@@ -330,21 +330,31 @@ Prioridad: Vault > Herramientas > Conocimiento General."""
         state = load_state()
         config = state.get("config", {})
         
+        # Smart Selection: Si el modelo es DeepSeek-R1, desactivar herramientas (no las soporta nativamente)
+        model_name_lower = m.lower()
+        supports_tools = True
+        if "deepseek-r1" in model_name_lower or "vision" in model_name_lower:
+            supports_tools = False
+            from core.logger import log
+            log(f"Modo 'Razonamiento/Visión' detectado ({m}): Desactivando herramientas de Ollama para evitar errores.", "info")
+
         # Filtrar herramientas según config
         active_tools = []
-        for t in OLLAMA_TOOLS_SCHEMA:
-            func_name = t.get("function", {}).get("name")
-            if func_name == "search_internet" and not config.get("tools_search", True):
-                continue
-            if func_name == "execute_mac_command" and not config.get("tools_command", False):
-                continue
-            if func_name == "read_local_file" and not config.get("tools_files", True):
-                continue
-            active_tools.append(t)
+        if supports_tools:
+            for t in OLLAMA_TOOLS_SCHEMA:
+                func_name = t.get("function", {}).get("name")
+                if func_name == "search_internet" and not config.get("tools_search", True):
+                    continue
+                if func_name == "execute_mac_command" and not config.get("tools_command", False):
+                    continue
+                if func_name == "read_local_file" and not config.get("tools_files", True):
+                    continue
+                active_tools.append(t)
 
         # Enviar primero las fuentes
         yield json.dumps({"type": "sources", "sources": sources}) + "\n"
 
+        full_answer = ""
         max_tool_iterations = 3
         for iteration in range(max_tool_iterations):
             r = requests.post(
@@ -356,8 +366,9 @@ Prioridad: Vault > Herramientas > Conocimiento General."""
                     "stream":  False,
                     "options": {
                         "temperature": 0.1, 
-                        "num_ctx": 16384,
-                        "num_thread": 8
+                        "num_ctx": 32768, # M4 Pro power
+                        "num_thread": 10,  # Aprovechar núcleos Performance
+                        "cache_prompt": config.get("prefix_cache", True) # Optimización masiva
                     },
                 },
                 timeout=300
@@ -365,7 +376,7 @@ Prioridad: Vault > Herramientas > Conocimiento General."""
             
             if r.status_code != 200:
                 err_msg = r.json().get("error", f"HTTP {r.status_code}")
-                yield json.dumps({"type": "error", "content": f"Ollama rechazó la petición: {err_msg}. ¿Estás usando un modelo de Visión para el chat? Cambialo a llama3.1 para poder usar herramientas."}) + "\n"
+                yield json.dumps({"type": "error", "content": f"Fallo en Ollama: {err_msg}. Sugerencia: El modelo '{m}' podría no soportar herramientas (Tool Calling). Probá con llama3.1 o qwen2.5 para funciones de búsqueda/terminal."}) + "\n"
                 break
 
             response_data = r.json()
@@ -375,9 +386,18 @@ Prioridad: Vault > Herramientas > Conocimiento General."""
             # Si la IA respondió con texto ADEMÁS de la tool call (o en lugar de), lo mostramos
             content = message.get("content", "")
             if content:
-                # Filtrar cualquier bloque que parezca un JSON de herramienta para evitar ruido en la UI
-                clean_content = re.sub(r'\{[\s\S]*?"name"[\s\S]*?\}', '', content).strip()
+                # Filtrar cualquier bloque que parezca un JSON de herramienta o ruido de formato
+                clean_content = re.sub(r'\{[\s\S]*?"name"[\s\S]*?\}', '', content)
+                # Eliminar "Respuesta: { ... }" o llaves de cierre accidentales
+                clean_content = re.sub(r'Respuesta:?\s*\{?', '', clean_content, flags=re.I).strip()
+                clean_content = clean_content.replace('Respuesta en formato JSON', '').strip()
+                
+                # Si el modelo sigue enviando una llave de cierre al final del texto
+                if clean_content.endswith('}'):
+                    clean_content = clean_content[:-1].strip()
+
                 if clean_content:
+                    full_answer += clean_content + " "
                     yield json.dumps({"type": "chunk", "content": clean_content}) + "\n"
 
             if "tool_calls" in message and message["tool_calls"]:
@@ -385,12 +405,21 @@ Prioridad: Vault > Herramientas > Conocimiento General."""
                 for tc in message["tool_calls"]:
                     func_name = tc.get("function", {}).get("name")
                     args = tc.get("function", {}).get("arguments", {})
-                    
+
                     if func_name == "execute_mac_command":
                         # PEDIR APROBACIÓN AL USUARIO
                         yield json.dumps({"type": "terminal_approval", "command": args.get("command", ""), "tool_call_id": tc.get("id")}) + "\n"
                         # No ejecutamos nada aún, el frontend debe re-enviar la aprobación.
                         return
+
+                    if func_name == "search_internet":
+                        query = args.get("query", "")
+                        # Optimización para M4 Pro: Convertir pregunta larga en keywords para DDG Lite
+                        words = query.split()
+                        if len(words) > 5:
+                            stop_words = {"que", "es", "el", "la", "de", "un", "una", "en", "sobre", "para", "como", "son", "los", "las"}
+                            keywords = [w for w in words if w.lower() not in stop_words]
+                            args["query"] = " ".join(keywords[:5])
                     
                     yield json.dumps({"type": "chunk", "content": f"\n\n*🤖 Jarvis está utilizando la herramienta: `{func_name}`...*\n\n"}) + "\n"
                     
@@ -406,9 +435,9 @@ Prioridad: Vault > Herramientas > Conocimiento General."""
                 # Volver a iterar para que la IA lea el resultado de la herramienta
             else:
                 # No hay tool calls, la IA terminó o respondió solo con texto.
-                if fullAnswer:
+                if full_answer:
                     from core.memory import save_chat_message
-                    save_chat_message("assistant", fullAnswer, mode, vault_path)
+                    save_chat_message("assistant", full_answer.strip(), mode, vault_path)
                 break
         
         yield json.dumps({"type": "done"}) + "\n"

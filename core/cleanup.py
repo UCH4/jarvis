@@ -1,8 +1,8 @@
 """
 core/cleanup.py — Herramientas para limpiar duplicados en el vault
 """
-import os
 import re
+import shutil
 from pathlib import Path
 from core.logger import log
 
@@ -13,14 +13,25 @@ def clean_vault_duplicates(vault_path: str, dry_run: bool = False) -> dict:
     1. Notas con el mismo 'fuente_pdf' en el YAML.
     2. Notas con nombres muy similares y sufijos de fecha.
     """
-    vault = Path(vault_path)
-    if not vault.exists():
-        return {"error": "Vault no encontrado"}
+    vault = Path(vault_path).expanduser().resolve()
+    if not vault.exists() or not vault.is_dir():
+        log(f"Error: El vault en {vault_path} no existe o no es un directorio.", "error")
+        return {"error": f"Vault no encontrado en {vault_path}"}
 
-    notes = list(vault.rglob("*.md"))
-    sources = {} # {fuente_pdf: [lista_de_rutas]}
+    log(f"Iniciando limpieza de duplicados en {vault.absolute()}...", "action")
     
-    log(f"Iniciando limpieza de duplicados en {vault_path}...", "action")
+    try:
+        # 1. Ignorar la carpeta de basura y archivos ocultos de macOS (._*)
+        # Esto evita bucles infinitos y errores de archivos de metadatos inexistentes
+        notes = [
+            n for n in vault.rglob("*.md") 
+            if "_Limpieza_Duplicados" not in n.parts and not n.name.startswith("._")
+        ]
+    except Exception as e:
+        log(f"Error escaneando el vault: {e}", "error")
+        return {"error": f"Error accediendo a los archivos del vault: {str(e)}"}
+
+    sources = {} # {fuente_pdf: [lista_de_rutas]}
     
     # 1. Agrupar por metadatos 'fuente_pdf'
     for note_path in notes:
@@ -46,10 +57,12 @@ def clean_vault_duplicates(vault_path: str, dry_run: bool = False) -> dict:
 
     for src, paths in sources.items():
         if len(paths) > 1:
-            # Ordenar por fecha de modificación (mantener la más reciente o la primera)
-            # Aquí mantendremos la que tenga el nombre más "limpio" (sin fecha)
-            # o simplemente la más reciente.
-            paths.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+            # Función segura para obtener mtime (evita FileNotFoundError en archivos bloqueados/fantasma)
+            def safe_mtime(p):
+                try: return p.stat().st_mtime
+                except Exception: return 0
+
+            paths.sort(key=safe_mtime, reverse=True)
             
             kept = paths[0]
             to_delete = paths[1:]
@@ -64,7 +77,7 @@ def clean_vault_duplicates(vault_path: str, dry_run: bool = False) -> dict:
                     dest = trash_dir / p.name
                     if dest.exists():
                         dest = trash_dir / f"{p.stem}_{removed_count}.md"
-                    os.rename(p, dest)
+                    shutil.move(str(p), str(dest))
                 
                 report["deleted"].append(rel_p)
                 removed_count += 1
@@ -74,5 +87,10 @@ def clean_vault_duplicates(vault_path: str, dry_run: bool = False) -> dict:
         log(f"Limpieza completada: {removed_count} archivos movidos a {trash_dir.name}", "ok")
     else:
         log("No se encontraron duplicados evidentes.", "info")
+
+    # Si hay demasiados archivos, truncamos el reporte para evitar errores de JSON/memoria
+    if len(report["deleted"]) > 500:
+        report["deleted"] = report["deleted"][:500]
+        report["note"] = "Reporte truncado a 500 archivos por tamaño."
 
     return report

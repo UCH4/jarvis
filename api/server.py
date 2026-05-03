@@ -9,10 +9,10 @@ try:
     from flask_cors import CORS
 
     from core.config   import load_config, save_config, API_PORT, ANALYSIS_MODEL
-    from core.state    import load_state, save_state, state_lock
+    from core.state    import load_state, save_state, scan_state, state_lock
     from core.scanner  import run_full_scan, process_single_pdf
     from core.ollama   import check_ollama, get_available_models, chat_con_vault
-    from core.obsidian import get_vault_stats, get_existing_topics_from_vault
+    from core.obsidian import get_vault_stats, get_existing_topics_from_vault, get_vault_graph
     from core.network  import get_local_ip, get_tunnel_url
 
     # El dashboard y los estáticos están en ../static/
@@ -24,6 +24,25 @@ try:
     @app.route("/")
     def index():
         return send_from_directory(str(_BASE), "dashboard.html")
+
+    # ─── Error Handlers ───────────────────────────────────────
+    @app.errorhandler(500)
+    def handle_500_error(e):
+        """Asegura que los errores del servidor devuelvan JSON."""
+        import logging
+        logging.error(f"Error interno del servidor: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": "Error interno del servidor al procesar la solicitud.",
+            "details": str(e)
+        }), 500
+
+    @app.errorhandler(404)
+    def handle_404_error(e):
+        return jsonify({
+            "status": "error",
+            "message": "Recurso no encontrado."
+        }), 404
 
     # ─── Estado del scan ──────────────────────────────────────
     @app.route("/api/status")
@@ -128,10 +147,10 @@ try:
         files = []
         try:
             for root, dirs, filenames in os.walk(vault_path):
-                # Ignorar carpetas ocultas o .obsidian
-                dirs[:] = [d for d in dirs if not d.startswith('.')]
+                # Ignorar carpetas ocultas, .obsidian o carpeta de limpieza
+                dirs[:] = [d for d in dirs if not d.startswith('.') and d != "_Limpieza_Duplicados"]
                 for f in filenames:
-                    if f.endswith('.md'):
+                    if f.endswith('.md') and not f.startswith('._'):
                         abs_path = os.path.join(root, f)
                         rel_path = os.path.relpath(abs_path, vault_path)
                         mtime = os.path.getmtime(abs_path)
@@ -150,14 +169,25 @@ try:
     @app.route("/api/cleanup", methods=["POST"])
     def api_cleanup():
         """Limpia duplicados en el vault."""
-        from core.cleanup import clean_vault_duplicates
-        cfg = load_config()
-        vault_path = cfg.get("vault_path")
-        if not vault_path:
-            return jsonify({"error": "Vault no configurado"}), 400
-        
-        report = clean_vault_duplicates(vault_path)
-        return jsonify(report)
+        try:
+            from core.cleanup import clean_vault_duplicates
+            cfg = load_config()
+            vault_path = cfg.get("vault_path")
+            if not vault_path:
+                return jsonify({"status": "error", "message": "Vault no configurado"}), 400
+            
+            report = clean_vault_duplicates(vault_path)
+            # Aseguramos que el reporte tenga un status
+            if "error" in report:
+                return jsonify({"status": "error", "message": report["error"]}), 500
+            
+            report["status"] = "success"
+            return jsonify(report)
+        except Exception as e:
+            return jsonify({
+                "status": "error",
+                "message": f"Fallo crítico en la limpieza: {str(e)}"
+            }), 500
 
     # ─── Estado de Ollama ─────────────────────────────────────
     @app.route("/api/ollama-status")
@@ -170,8 +200,10 @@ try:
     def api_chat():
         data       = request.get_json() or {}
         question   = data.get("question", "").strip()
-        model      = data.get("model", ANALYSIS_MODEL)
-        mode       = data.get("mode", "normal")
+        # Cargar modelo desde el estado si no viene en el request
+        state = load_state()
+        model = data.get("model") or state.get("config", {}).get("chat_model") or ANALYSIS_MODEL
+        mode  = data.get("mode", "normal")
 
         if not question:
             return jsonify({"error": "question es requerido"}), 400
@@ -192,7 +224,7 @@ try:
     # ─── Modo Profesor: Ejercicios y Flashcards ───────────────
     @app.route("/api/exercise", methods=["POST"])
     def api_exercise():
-        from core.professor import generate_exercise
+        from agents.professor import generate_exercise
         from core.rag import buscar_en_vault
         data    = request.get_json() or {}
         topic   = data.get("topic", "Temas generales")
@@ -208,7 +240,7 @@ try:
 
     @app.route("/api/flashcards", methods=["POST"])
     def api_flashcards():
-        from core.professor import generate_flashcards
+        from agents.professor import generate_flashcards
         from core.rag import buscar_en_vault
         data    = request.get_json() or {}
         topic   = data.get("topic", "Conceptos clave")
@@ -224,15 +256,15 @@ try:
 
     @app.route("/api/terminal/execute", methods=["POST"])
     def api_terminal_execute():
-        from core.terminal import TerminalTool
+        from agents.terminal import MacTerminalAgent
         data = request.get_json() or {}
         command = data.get("command", "")
         if not command:
-            return jsonify({"error": "No se proporcionó un comando"}), 400
+            return jsonify({"status": "error", "message": "No se proporcionó un comando"}), 400
         
-        tool = TerminalTool()
-        result = tool.execute(command)
-        return jsonify(result)
+        agent = MacTerminalAgent()
+        output = agent.run_command(command)
+        return jsonify({"status": "success" if "✅" in output else "error", "output": output})
 
     # ─── Info de red ──────────────────────────────────────────
     @app.route("/api/network-info")
@@ -268,6 +300,13 @@ try:
             except Exception as e:
                 pass
         return jsonify({"vaults": vaults})
+
+    @app.route("/api/graph")
+    def api_graph():
+        vault_path = request.args.get("vault_path", "").strip()
+        if not vault_path:
+            vault_path = load_config().get("vault_path", "")
+        return jsonify(get_vault_graph(vault_path))
 
     # ─── Estáticos ────────────────────────────────────────────
     @app.route("/static/<path:filename>")

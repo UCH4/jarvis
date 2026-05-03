@@ -102,7 +102,7 @@ def get_vault_stats(vault_path: str) -> dict:
     if not vault.exists():
         return {"notes": 0, "folders": 0, "categories": {}, "recent": [], "by_type": {}, "by_difficulty": {}}
 
-    notes   = list(vault.rglob("*.md"))
+    notes   = [n for n in vault.rglob("*.md") if not n.name.startswith("._")]
     folders = [d for d in vault.rglob("*") if d.is_dir() and not d.name.startswith(".")]
     categories, by_type, by_difficulty = {}, {}, {}
 
@@ -139,6 +139,64 @@ def get_vault_stats(vault_path: str) -> dict:
             for n in recent
         ],
     }
+
+
+def get_vault_graph(vault_path: str) -> dict:
+    """Extrae nodos y aristas para representar el grafo del vault."""
+    vault = Path(vault_path)
+    if not vault.exists():
+        return {"nodes": [], "edges": []}
+
+    notes = [n for n in vault.rglob("*.md") if not n.name.startswith("._")]
+    nodes = []
+    edges = []
+    node_ids = set()
+
+    # Primero, crear nodos para categorías y materias (agrupadores)
+    categories = set()
+    materias = set()
+
+    for note in notes:
+        try:
+            content = note.read_text(encoding="utf-8", errors="ignore")
+            # Extraer metadatos
+            m_match = re.search(r'materia:\s*"(.*?)"', content)
+            c_match = re.search(r'categoria:\s*"(.*?)"', content)
+            
+            note_id = note.stem
+            if note_id not in node_ids:
+                nodes.append({"id": note_id, "label": note_id, "group": "note", "title": str(note.relative_to(vault))})
+                node_ids.add(note_id)
+
+            if m_match:
+                mat = m_match.group(1)
+                if mat and mat not in node_ids:
+                    nodes.append({"id": mat, "label": mat, "group": "materia", "color": "#a29bfe"})
+                    node_ids.add(mat)
+                if mat:
+                    edges.append({"from": note_id, "to": mat})
+            
+            if c_match:
+                cat = c_match.group(1)
+                if cat and cat not in node_ids:
+                    nodes.append({"id": cat, "label": cat, "group": "category", "color": "#00cec9"})
+                    node_ids.add(cat)
+                if cat and m_match:
+                    mat = m_match.group(1)
+                    if mat: edges.append({"from": mat, "to": cat})
+
+            # Extraer conexiones [[Wikilinks]]
+            links = re.findall(r'\[\[(.*?)\]\]', content)
+            for link in links:
+                target = link.split('|')[0].strip()
+                # Solo agregar arista si el destino existe como nota o agrupador
+                # (Para simplificar, las agregamos todas y vis.js las manejará si el ID existe)
+                edges.append({"from": note_id, "to": target})
+
+        except Exception:
+            continue
+
+    return {"nodes": nodes, "edges": edges}
 
 
 def get_existing_topics_from_vault(vault_path: str) -> list:

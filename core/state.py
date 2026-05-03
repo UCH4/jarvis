@@ -34,8 +34,10 @@ INITIAL_STATE = {
         "tools_command": False,
         "tools_files":   True,
         "analysis_model": "llama3.1:8b",
+        "chat_model":     "deepseek-r1:14b",
         "embedding_model": "nomic-embed-text",
-        "duplicate_threshold": 0.92
+        "duplicate_threshold": 0.92,
+        "prefix_cache":  True
     }
 }
 

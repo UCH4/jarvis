@@ -796,3 +796,14 @@ input:checked + .slider-small:before {
 }
 
 
+
+/* ─── NEURAL PULSE ─── */
+.neural-pulse {
+  box-shadow: 0 0 0 0 rgba(0, 229, 255, 0.4);
+  animation: neuralPulse 1.5s infinite;
+}
+@keyframes neuralPulse {
+  0% { box-shadow: 0 0 0 0 rgba(0, 229, 255, 0.4); }
+  70% { box-shadow: 0 0 0 10px rgba(0, 229, 255, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(0, 229, 255, 0); }
+}

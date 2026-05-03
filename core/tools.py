@@ -3,13 +3,9 @@ import os
 
 def execute_mac_command(command: str) -> str:
     """Ejecuta un comando en la terminal de Mac de forma segura."""
-    from core.terminal import TerminalTool
-    tool = TerminalTool()
-    res = tool.execute(command)
-    if res["status"] == "success":
-        return res["output"]
-    else:
-        return f"ERROR: {res['output']}"
+    from agents.terminal import MacTerminalAgent
+    agent = MacTerminalAgent()
+    return agent.run_command(command)
 
 def read_local_file(path: str) -> str:
     """Lee el contenido de un archivo local en la Mac."""
@@ -41,23 +37,30 @@ def search_internet(query: str) -> str:
         res.raise_for_status()
         soup = BeautifulSoup(res.text, "html.parser")
         
-        # Selectores variados para máxima compatibilidad
-        results = soup.select('.result-snippet') or soup.select('.result__snippet') or soup.select('.snippet')
+        # Selectores variados para máxima compatibilidad (DDG cambia seguido)
+        results = (soup.select('.result-snippet') or 
+                   soup.select('.result__snippet') or 
+                   soup.select('.snippet') or 
+                   soup.select('.result__body'))
         
         text_results = []
-        for r in results[:8]:
+        for r in results[:10]:
             txt = r.get_text().strip()
-            if len(txt) > 10:
+            if len(txt) > 20:
+                # Limpiar saltos de línea excesivos
+                txt = " ".join(txt.split())
                 text_results.append("- " + txt)
             
         if not text_results:
-            # Fallback a títulos y links
-            links = soup.select('.result-link') or soup.select('.result__a')
-            for l in links[:5]:
-                text_results.append("- " + l.get_text().strip())
+            # Fallback a títulos y links (a veces DDG Lite solo manda eso)
+            links = soup.select('.result-link') or soup.select('.result__a') or soup.select('a.result-link')
+            for l in links[:6]:
+                txt = l.get_text().strip()
+                if txt:
+                    text_results.append("- " + txt)
 
         if not text_results:
-            return "No se hallaron resultados externos relevantes. Probablemente la búsqueda sea demasiado específica."
+            return "No se hallaron resultados externos relevantes. La búsqueda en DuckDuckGo no devolvió fragmentos legibles en este momento."
             
         return "\n".join(text_results)
     except Exception as e:
