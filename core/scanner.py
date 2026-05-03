@@ -12,6 +12,7 @@ from core.ollama     import get_embedding, analyze_content
 from core.obsidian   import build_obsidian_note, get_vault_folder, safe_filename, get_existing_topics_from_vault
 from core.duplicates import check_duplicate
 from core.db         import get_collection
+from core.chunker    import markdown_aware_chunks
 
 
 
