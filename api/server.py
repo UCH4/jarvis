@@ -171,6 +171,7 @@ try:
         data       = request.get_json() or {}
         question   = data.get("question", "").strip()
         model      = data.get("model", ANALYSIS_MODEL)
+        mode       = data.get("mode", "normal")
 
         if not question:
             return jsonify({"error": "question es requerido"}), 400
@@ -186,7 +187,52 @@ try:
             return Response(stream_with_context(error_stream()), content_type='application/x-ndjson')
 
         from flask import Response, stream_with_context
-        return Response(stream_with_context(chat_con_vault(question, vault_path, model)), content_type='application/x-ndjson')
+        return Response(stream_with_context(chat_con_vault(question, vault_path, model, mode)), content_type='application/x-ndjson')
+
+    # ─── Modo Profesor: Ejercicios y Flashcards ───────────────
+    @app.route("/api/exercise", methods=["POST"])
+    def api_exercise():
+        from core.professor import generate_exercise
+        from core.rag import buscar_en_vault
+        data    = request.get_json() or {}
+        topic   = data.get("topic", "Temas generales")
+        cfg     = load_config()
+        vault_path = cfg.get("vault_path", "")
+        
+        # Obtener contexto para el ejercicio
+        docs = buscar_en_vault(topic, vault_path, top_k=3)
+        context = "\n\n".join([d["snippet"] for d in docs])
+        
+        exercise = generate_exercise(topic, context)
+        return jsonify(exercise)
+
+    @app.route("/api/flashcards", methods=["POST"])
+    def api_flashcards():
+        from core.professor import generate_flashcards
+        from core.rag import buscar_en_vault
+        data    = request.get_json() or {}
+        topic   = data.get("topic", "Conceptos clave")
+        cfg     = load_config()
+        vault_path = cfg.get("vault_path", "")
+        
+        # Obtener contexto
+        docs = buscar_en_vault(topic, vault_path, top_k=5)
+        context = "\n\n".join([d["snippet"] for d in docs])
+        
+        cards = generate_flashcards(context)
+        return jsonify({"flashcards": cards})
+
+    @app.route("/api/terminal/execute", methods=["POST"])
+    def api_terminal_execute():
+        from core.terminal import TerminalTool
+        data = request.get_json() or {}
+        command = data.get("command", "")
+        if not command:
+            return jsonify({"error": "No se proporcionó un comando"}), 400
+        
+        tool = TerminalTool()
+        result = tool.execute(command)
+        return jsonify(result)
 
     # ─── Info de red ──────────────────────────────────────────
     @app.route("/api/network-info")

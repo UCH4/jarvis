@@ -528,7 +528,7 @@ async function sendChat() {
     const r = await fetch(`${API}/chat`, {
       method:  'POST',
       headers: {'Content-Type': 'application/json'},
-      body:    JSON.stringify({ question, vault_path: vaultPath, model }),
+      body:    JSON.stringify({ question, vault_path: vaultPath, model, mode: chatMode }),
     });
 
     removeTyping();
@@ -560,6 +560,8 @@ async function sendChat() {
           if (d.type === "sources") {
             msgDiv = appendMsg('jarvis', '', d.sources);
             bubbleEl = msgDiv.querySelector('.msg-bubble');
+          } else if (d.type === "terminal_approval") {
+            showTerminalModal(d.command);
           } else if (d.type === "chunk") {
             fullAnswer += d.content;
             if (bubbleEl) {
@@ -594,6 +596,40 @@ async function sendChat() {
   }
 }
 
+
+let pendingTerminalCommand = null;
+
+function showTerminalModal(command) {
+  pendingTerminalCommand = command;
+  document.getElementById('terminal-command-display').textContent = command;
+  document.getElementById('terminal-modal').classList.add('active');
+}
+
+async function closeTerminalModal(approved) {
+  document.getElementById('terminal-modal').classList.remove('active');
+  if (approved && pendingTerminalCommand) {
+    appendMsg('user', `Ejecutando comando: ${pendingTerminalCommand}`);
+    appendTyping();
+    try {
+      const r = await fetch(`${API}/terminal/execute`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ command: pendingTerminalCommand })
+      });
+      const d = await r.json();
+      removeTyping();
+      
+      const statusIcon = d.status === 'success' ? '✅' : '❌';
+      appendMsg('jarvis', `${statusIcon} Resultado del comando:\n\n\`\`\`bash\n${d.output}\n\`\`\`\n\n¿Necesitás algo más con este resultado?`);
+    } catch (e) {
+      removeTyping();
+      appendMsg('jarvis', 'Error ejecutando comando terminal.');
+    }
+  } else {
+    appendMsg('jarvis', 'Comando rechazado por el usuario. No ejecutaré esa acción.');
+  }
+  pendingTerminalCommand = null;
+}
 
 function clearChat() {
   document.getElementById('chat-messages').innerHTML = `
@@ -667,5 +703,75 @@ async function runVaultCleanup() {
     }
 }
 
+// ─── CHAT MODO PROFESOR ─────────────────────────────────────
+let chatMode = 'normal';
+
+function toggleChatMode() {
+  const toggle = document.getElementById('chat-mode-toggle');
+  const label = document.getElementById('mode-label');
+  chatMode = toggle.checked ? 'professor' : 'normal';
+  label.textContent = toggle.checked ? 'Modo Profesor 🎓' : 'Modo Normal';
+  label.style.color = toggle.checked ? 'var(--purple)' : 'var(--text3)';
+  
+  if (chatMode === 'professor') {
+    appendMsg('jarvis', '¡Excelente elección! Ahora te guiaré de forma socrática. En lugar de darte la respuesta directamente, te ayudaré a que la descubras por vos mismo usando tus propios apuntes.');
+  } else {
+    appendMsg('jarvis', 'Modo directo activado. Responderé a tus preguntas de forma concisa usando la información del vault.');
+  }
+}
+
+async function generateExerciseUI() {
+  appendTyping();
+  try {
+    const r = await fetch(`${API}/exercise`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ topic: "Conceptos clave del vault" })
+    });
+    const d = await r.json();
+    removeTyping();
+    
+    if (d.error) {
+      appendMsg('jarvis', 'No pude generar un ejercicio en este momento. Asegurate de tener notas indexadas.');
+      return;
+    }
+    
+    const container = document.getElementById('chat-messages');
+    const div = document.createElement('div');
+    div.className = 'msg jarvis fade-in';
+    const exerciseId = 'ex-' + Date.now();
+    
+    div.innerHTML = `
+      <div class="msg-label">jarvis 🎓</div>
+      <div class="msg-bubble">
+        <div class="exercise-card">
+          <div class="exercise-title">${d.tipo} · EJERCICIO</div>
+          <div class="exercise-body">${renderChatText(d.enunciado)}</div>
+          <div class="exercise-hint">💡 <strong>Pista:</strong> ${d.pista}</div>
+          <button class="exercise-sol-btn" onclick="toggleExerciseSolution('${exerciseId}')">Ver solución sugerida</button>
+          <div id="${exerciseId}" class="exercise-sol-body">${renderChatText(d.solucion_oculta)}</div>
+        </div>
+      </div>
+    `;
+    container.appendChild(div);
+    container.scrollTop = container.scrollHeight;
+    
+    // MathJax
+    if (window.MathJax && window.MathJax.typesetPromise) {
+      window.MathJax.typesetPromise([div]);
+    }
+  } catch (e) {
+    removeTyping();
+    appendMsg('jarvis', 'Error al generar ejercicio.');
+  }
+}
+
+function toggleExerciseSolution(id) {
+  const el = document.getElementById(id);
+  const isHidden = !el.style.display || el.style.display === 'none';
+  el.style.display = isHidden ? 'block' : 'none';
+}
+
 // ─── START ─────────────────────────────────────────────
 init();
+

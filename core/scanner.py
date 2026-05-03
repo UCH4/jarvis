@@ -14,18 +14,7 @@ from core.duplicates import check_duplicate
 from core.db         import get_collection
 
 
-def chunk_text(text: str, chunk_size: int = 1500, overlap: int = 200) -> list:
-    """Divide el texto en partes más pequeñas con superposición para RAG."""
-    chunks = []
-    start = 0
-    text_len = len(text)
-    while start < text_len:
-        end = min(start + chunk_size, text_len)
-        chunk = text[start:end].strip()
-        if len(chunk) > 50:
-            chunks.append(chunk)
-        start += chunk_size - overlap
-    return chunks
+
 
 
 def process_single_pdf(pdf_path: str, vault_path: str, registry: dict,
@@ -95,13 +84,20 @@ def process_single_pdf(pdf_path: str, vault_path: str, registry: dict,
     # 9. Inyectar en ChromaDB (Vector DB)
     try:
         collection = get_collection()
-        chunks = chunk_text(full_text)
+        # Generate context-aware chunks with title and section metadata
+        chunks = markdown_aware_chunks(full_text, title=analysis.get("titulo", p.stem))
+        # Extract just the content for vector store
+        chunk_texts = [c["content"] for c in chunks]
         if chunks:
             # Identificadores únicos para cada chunk
             ids = [f"{note_path.stem}_{i}" for i in range(len(chunks))]
             rel_path = str(note_path.relative_to(Path(vault_path)))
-            metadatas = [{"title": title, "path": rel_path, "source": p.name} for _ in chunks]
-            collection.add(documents=chunks, metadatas=metadatas, ids=ids)
+            # Include section info from each chunk's metadata
+            metadatas = [{"title": title,
+                         "section": c.get("section", ""),
+                         "path": rel_path,
+                         "source": p.name} for c in chunks]
+            collection.add(documents=chunk_texts, metadatas=metadatas, ids=ids)
         log(f"Vectorizados {len(chunks)} fragmentos en ChromaDB", "info")
     except Exception as e:
         log(f"Error indexando en Vector DB: {e}", "warn")

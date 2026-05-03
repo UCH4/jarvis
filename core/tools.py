@@ -2,19 +2,14 @@ import subprocess
 import os
 
 def execute_mac_command(command: str) -> str:
-    """Ejecuta un comando en la terminal de Mac y devuelve el resultado."""
-    try:
-        # Usamos timeout para evitar comandos que se queden colgados
-        result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=15)
-        out = result.stdout.strip()
-        err = result.stderr.strip()
-        if result.returncode != 0:
-            return f"Error ({result.returncode}):\n{err}"
-        return out if out else "Comando ejecutado con éxito (sin salida)."
-    except subprocess.TimeoutExpired:
-        return "El comando tardó demasiado y fue cancelado."
-    except Exception as e:
-        return f"Excepción al ejecutar comando: {e}"
+    """Ejecuta un comando en la terminal de Mac de forma segura."""
+    from core.terminal import TerminalTool
+    tool = TerminalTool()
+    res = tool.execute(command)
+    if res["status"] == "success":
+        return res["output"]
+    else:
+        return f"ERROR: {res['output']}"
 
 def read_local_file(path: str) -> str:
     """Lee el contenido de un archivo local en la Mac."""

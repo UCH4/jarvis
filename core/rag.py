@@ -26,7 +26,8 @@ def buscar_en_vault(query: str, vault_path: str, top_k: int = 5) -> list:
         seen_snippets = set()
         
         for q in queries:
-            results = collection.query(query_texts=[q], n_results=top_k)
+            # Pedimos más resultados de los necesarios para que el reranker tenga material
+            results = collection.query(query_texts=[q], n_results=max(10, top_k * 2))
             if not results['documents'] or not results['documents'][0]:
                 continue
                 
@@ -46,9 +47,13 @@ def buscar_en_vault(query: str, vault_path: str, top_k: int = 5) -> list:
                 })
                 seen_snippets.add(snippet)
         
-        # 4. Re-ranking por Score y limitar a top_k final
-        all_results.sort(key=lambda x: x["score"], reverse=True)
-        return all_results[:top_k]
+        # 4. Re-ranking (LLM-as-a-judge)
+        if all_results:
+            from core.reranker import rerank
+            log(f"Reranking {len(all_results)} fragmentos...", "info")
+            return rerank(query, all_results, top_k=top_k)
+        
+        return []
 
     except Exception as e:
         from core.logger import log

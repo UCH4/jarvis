@@ -266,8 +266,10 @@ def _fallback_analysis() -> dict:
 
 # ─── Chat RAG ────────────────────────────────────────────────
 
-def chat_con_vault(question: str, vault_path: str, model: str = None) -> dict:
+def chat_con_vault(question: str, vault_path: str, model: str = None, mode: str = "normal") -> dict:
     from core.rag import buscar_en_vault
+    from core.professor import SOCRATIC_SYSTEM_PROMPT
+    
     m    = model or ANALYSIS_MODEL
     docs = buscar_en_vault(question, vault_path, top_k=5)
 
@@ -282,7 +284,7 @@ def chat_con_vault(question: str, vault_path: str, model: str = None) -> dict:
         context_text = "\n\n".join(context_parts)
         sources      = [{"title": d["title"], "path": d["path"], "score": d["score"]} for d in docs]
 
-    prompt_system = """Sos Jarvis, el arquitecto de conocimiento del usuario. Estás corriendo en una Mac M4 Pro de alto rendimiento.
+    prompt_standard = """Sos Jarvis, el arquitecto de conocimiento del usuario. Estás corriendo en una Mac M4 Pro de alto rendimiento.
 
 DIRECTIVAS MAESTRAS DE RAZONAMIENTO:
 1. EL VAULT ES TU CEREBRO: Toda la información necesaria para responder suele estar en el 'CONTEXTO DEL VAULT'. Analizalo con profundidad quirúrgica. Si la respuesta está ahí, USALA y no busques en internet.
@@ -293,10 +295,31 @@ DIRECTIVAS MAESTRAS DE RAZONAMIENTO:
 
 Prioridad: Vault > Herramientas > Conocimiento General."""
 
+    if mode == "professor":
+        prompt_system = SOCRATIC_SYSTEM_PROMPT
+    else:
+        prompt_system = prompt_standard
+
+    from core.memory import save_chat_message, get_recent_chat_history
+    
+    # 1. Guardar pregunta del usuario
+    save_chat_message("user", question, mode, vault_path)
+    
+    # 2. Recuperar historial reciente
+    history = get_recent_chat_history(limit=6) # 3 vueltas de conversación
+    
     messages = [
         {"role": "system", "content": prompt_system},
-        {"role": "user", "content": f"### CONOCIMIENTO DEL VAULT ###\n{context_text}\n\n### PREGUNTA DEL ESTUDIANTE ###\n{question}"}
     ]
+    
+    # Agregar historial (evitando duplicar la pregunta actual si ya se guardó)
+    for msg in history:
+        # No agregamos el último mensaje si es igual a la pregunta actual (evitar duplicado)
+        if msg["role"] == "user" and msg["content"] == question:
+            continue
+        messages.append(msg)
+        
+    messages.append({"role": "user", "content": f"### CONOCIMIENTO DEL VAULT ###\n{context_text}\n\n### PREGUNTA DEL ESTUDIANTE ###\n{question}"})
 
     try:
         import json
@@ -361,19 +384,31 @@ Prioridad: Vault > Herramientas > Conocimiento General."""
                 # Avisar al frontend que estamos usando herramientas
                 for tc in message["tool_calls"]:
                     func_name = tc.get("function", {}).get("name")
+                    args = tc.get("function", {}).get("arguments", {})
+                    
+                    if func_name == "execute_mac_command":
+                        # PEDIR APROBACIÓN AL USUARIO
+                        yield json.dumps({"type": "terminal_approval", "command": args.get("command", ""), "tool_call_id": tc.get("id")}) + "\n"
+                        # No ejecutamos nada aún, el frontend debe re-enviar la aprobación.
+                        return
+                    
                     yield json.dumps({"type": "chunk", "content": f"\n\n*🤖 Jarvis está utilizando la herramienta: `{func_name}`...*\n\n"}) + "\n"
                     
-                    # Ejecutar herramienta
+                    # Ejecutar herramienta (para search o read_file, que son seguras)
                     result = execute_tool(tc)
                     
                     # Agregar el resultado al historial
                     messages.append({
                         "role": "tool",
                         "content": result,
+                        "tool_call_id": tc.get("id") # Importante para modelos que lo requieren
                     })
                 # Volver a iterar para que la IA lea el resultado de la herramienta
             else:
                 # No hay tool calls, la IA terminó o respondió solo con texto.
+                if fullAnswer:
+                    from core.memory import save_chat_message
+                    save_chat_message("assistant", fullAnswer, mode, vault_path)
                 break
         
         yield json.dumps({"type": "done"}) + "\n"

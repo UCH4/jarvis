@@ -136,7 +136,17 @@
     <div class="card" style="flex:1;display:flex;flex-direction:column;min-height:0;">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
         <div class="card-title" style="margin:0;">Chat con tus apuntes</div>
-        <button class="btn btn-ghost" style="font-size:11px;padding:5px 12px;" onclick="clearChat()">limpiar chat</button>
+        <div style="display:flex;align-items:center;gap:12px;">
+          <div class="mode-toggle">
+            <span id="mode-label" style="font-size:11px;color:var(--text3);margin-right:6px;">Modo Normal</span>
+            <label class="switch-small">
+              <input type="checkbox" id="chat-mode-toggle" onchange="toggleChatMode()">
+              <span class="slider-small"></span>
+            </label>
+          </div>
+          <button class="btn btn-ghost" style="font-size:11px;padding:5px 12px;" onclick="generateExerciseUI()">🎓 Generar Ejercicio</button>
+          <button class="btn btn-ghost" style="font-size:11px;padding:5px 12px;" onclick="clearChat()">limpiar chat</button>
+        </div>
       </div>
       <div class="chat-wrap">
         <div class="chat-messages" id="chat-messages">
@@ -304,6 +314,19 @@
 </div>
 
 </div><!-- /.app -->
+
+<!-- MODAL DE TERMINAL -->
+<div id="terminal-modal" class="modal">
+  <div class="modal-content card">
+    <div class="card-title">⬡ Confirmación de Comando</div>
+    <div style="font-size:13px;color:var(--text2);margin-bottom:12px;">Jarvis quiere ejecutar el siguiente comando en tu Mac:</div>
+    <div id="terminal-command-display" style="font-family:var(--mono);background:var(--bg);padding:12px;border-radius:6px;border:1px solid var(--border);color:var(--cyan);margin-bottom:20px;word-break:break-all;"></div>
+    <div style="display:flex;gap:12px;justify-content:flex-end;">
+      <button class="btn btn-ghost" onclick="closeTerminalModal(false)">Rechazar</button>
+      <button class="btn btn-primary" onclick="closeTerminalModal(true)">Ejecutar Comando</button>
+    </div>
+  </div>
+</div>
 
 <!-- JS modularizado -->
 <script src="/static/js/dashboard.js?v=3"></script>
