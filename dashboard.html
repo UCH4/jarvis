@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Jarvis Scanner</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+
+<!-- MathJax: renderiza fórmulas LaTeX en el chat ($...$, $$...$$, \(...\), \[...\]) -->
+<script>
+  window.MathJax = {
+    tex: {
+      inlineMath:  [['$','$'], ['\\(','\\)']],
+      displayMath: [['$$','$$'], ['\\[','\\]']],
+      processEscapes: true
+    },
+    options: { skipHtmlTags: ['script','noscript','style','textarea','pre'] },
+    startup: { typeset: false }
+  };
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js" async></script>
+
+<!-- CSS modularizado -->
+<link rel="stylesheet" href="/static/css/dashboard.css?v=3">
+</head>
+<body>
+<div class="app">
+
+<!-- ─── HEADER ─── -->
+<header>
+  <div class="logo">
+    <div class="logo-icon">⬡</div>
+    JARVIS SCANNER
+  </div>
+  <span style="font-family:var(--mono);font-size:11px;color:var(--text3);padding:0 16px;border-left:1px solid var(--border);margin-left:8px;">
+    Academic Vault Architect
+  </span>
+  <div class="header-sep"></div>
+  <div class="ollama-dot">
+    <span class="dot" id="ollama-dot"></span>
+    <span id="ollama-status-text">comprobando...</span>
+  </div>
+  <div style="width:1px;height:20px;background:var(--border);margin:0 16px;"></div>
+  <select id="model-select" style="background:var(--bg3);border:1px solid var(--border);border-radius:6px;color:var(--text2);font-family:var(--mono);font-size:11px;padding:4px 8px;outline:none;">
+    <option>cargando modelos...</option>
+  </select>
+</header>
+
+<!-- ─── SIDEBAR ─── -->
+<nav class="sidebar">
+  <div class="nav-section">
+    <div class="nav-label">Vistas</div>
+    <div class="nav-item active" onclick="switchView('scan', this)">
+      <span class="nav-item-icon">⚡</span> Scanner
+    </div>
+    <div class="nav-item" onclick="switchView('chat', this)">
+      <span class="nav-item-icon">◎</span> Chat IA
+    </div>
+    <div class="nav-item" onclick="switchView('vault', this)">
+      <span class="nav-item-icon">◈</span> Mi Vault
+    </div>
+    <div class="nav-item" onclick="switchView('settings', this)">
+      <span class="nav-item-icon">⊹</span> Configuración
+    </div>
+  </div>
+
+  <div class="stats-mini" id="sidebar-stats">
+    <div class="nav-label" style="padding:0 0 8px;">Vault</div>
+    <div class="stat-mini-row"><span>Notas</span><span class="stat-mini-val" id="sm-notes">—</span></div>
+    <div class="stat-mini-row"><span>Carpetas</span><span class="stat-mini-val" id="sm-folders">—</span></div>
+    <div class="stat-mini-row"><span>Materias</span><span class="stat-mini-val" id="sm-cats">—</span></div>
+  </div>
+</nav>
+
+<!-- ─── MAIN ─── -->
+<main>
+
+  <!-- SCAN VIEW -->
+  <div class="view active" id="view-scan">
+    <div class="card">
+      <div class="card-title">Configuración de Rutas</div>
+      <div class="form-row">
+        <div class="field">
+          <label>Carpeta de PDFs</label>
+          <input type="text" id="scan-path" placeholder="/Users/joaquin/Documentos/facu" />
+        </div>
+        <div class="field">
+          <label>Vault Obsidian</label>
+          <select id="vault-path" style="width: 100%; padding: 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-alt); color: var(--text);">
+            <option value="">Cargando vaults...</option>
+          </select>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+        <button class="btn btn-primary" id="btn-scan" onclick="startScan()">
+          <span>⚡</span> Iniciar Scan
+        </button>
+        <button class="btn btn-ghost" onclick="loadVaultStats()">
+          <span>↻</span> Refrescar vault
+        </button>
+        <div class="header-sep"></div>
+        <div class="chip chip-idle" id="status-chip">● idle</div>
+      </div>
+      <div id="progress-section" style="display:none;">
+        <div class="progress-wrapper">
+          <div class="progress-bar" id="progress-bar" style="width:0%"></div>
+        </div>
+        <div class="progress-info">
+          <span id="progress-file">—</span>
+          <span id="progress-pct">0%</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="metrics">
+      <div class="metric"><div class="metric-val cyan"  id="m-total">0</div><div class="metric-label">PDFs encontrados</div></div>
+      <div class="metric"><div class="metric-val green" id="m-created">0</div><div class="metric-label">Notas creadas</div></div>
+      <div class="metric"><div class="metric-val amber" id="m-dupes">0</div><div class="metric-label">Duplicados</div></div>
+      <div class="metric"><div class="metric-val red"   id="m-errors">0</div><div class="metric-label">Errores</div></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Resultados del Scan</div>
+      <div class="results-list" id="results-list">
+        <div class="empty">
+          <div class="empty-icon">◈</div>
+          <div>Iniciá un scan para ver los resultados</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CHAT VIEW -->
+  <div class="view" id="view-chat">
+    <div class="card" style="flex:1;display:flex;flex-direction:column;min-height:0;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+        <div class="card-title" style="margin:0;">Chat con tus apuntes</div>
+        <button class="btn btn-ghost" style="font-size:11px;padding:5px 12px;" onclick="clearChat()">limpiar chat</button>
+      </div>
+      <div class="chat-wrap">
+        <div class="chat-messages" id="chat-messages">
+          <div class="msg jarvis">
+            <div class="msg-label">jarvis</div>
+            <div class="msg-bubble">Hola! Soy Jarvis. Podés preguntarme cualquier cosa sobre tus apuntes del vault. Las fórmulas matemáticas se van a mostrar correctamente. Por ejemplo: <em>"¿Qué es el inverso multiplicativo?"</em> o <em>"¿Cuándo da V la implicación p→q?"</em>.</div>
+          </div>
+        </div>
+        <div class="chat-input-row">
+          <textarea
+            id="chat-input"
+            placeholder="Preguntá algo sobre tus apuntes... (Enter para enviar, Shift+Enter para nueva línea)"
+            rows="1"
+            onkeydown="handleChatKey(event)"
+            oninput="autoResize(this)"
+          ></textarea>
+          <button class="btn btn-primary" id="btn-chat" onclick="sendChat()" style="padding:10px 16px;white-space:nowrap;">
+            <span>⬡</span> Preguntar
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- VAULT VIEW -->
+  <div class="view" id="view-vault">
+    <div class="card">
+      <div class="card-title">Estado del Vault</div>
+      <div class="metrics" style="margin-bottom:20px;">
+        <div class="metric"><div class="metric-val cyan"   id="v-notes">0</div><div class="metric-label">Notas totales</div></div>
+        <div class="metric"><div class="metric-val green"  id="v-folders">0</div><div class="metric-label">Carpetas</div></div>
+        <div class="metric"><div class="metric-val purple" id="v-cats" style="color:var(--purple)">0</div><div class="metric-label">Categorías</div></div>
+        <div class="metric"><div class="metric-val amber"  id="v-types">0</div><div class="metric-label">Tipos de nota</div></div>
+      </div>
+      <div class="card-title">Por Categoría</div>
+      <div id="cat-bars"><div class="empty"><div class="empty-icon">◈</div><div>Configurá el vault y refrescá</div></div></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Notas Recientes</div>
+      <div class="results-list" id="recent-list">
+        <div class="empty"><div class="empty-icon">◈</div><div>Sin notas todavía</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SETTINGS VIEW -->
+  <div class="view" id="view-settings">
+    <div class="card">
+      <div class="card-title">🤖 Inteligencia y Herramientas</div>
+      <div class="settings-grid">
+        <div class="setting-item">
+          <div class="setting-info">
+            <div class="setting-name">Auto-Sync (Vigilante)</div>
+            <div class="setting-desc">Escanea automáticamente nuevos archivos PDF en la carpeta.</div>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="s-auto-sync">
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="setting-item">
+          <div class="setting-info">
+            <div class="setting-name">Búsqueda en Internet</div>
+            <div class="setting-desc">Permite a la IA buscar datos actuales en la web.</div>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="s-tool-search">
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="setting-item">
+          <div class="setting-info">
+            <div class="setting-name">Ejecución de Comandos</div>
+            <div class="setting-desc">Permite a la IA ejecutar comandos bash (Usar con precaución).</div>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="s-tool-command">
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="setting-item">
+          <div class="setting-info">
+            <div class="setting-name">Mantenimiento del Vault</div>
+            <div class="setting-desc">Busca y mueve notas duplicadas a una carpeta de basura.</div>
+          </div>
+          <button class="btn-primary" onclick="runVaultCleanup()" id="cleanupBtn" style="padding: 8px 16px; font-size: 11px;">
+            Limpiar Duplicados
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Preferencias del Modelo</div>
+      <div class="form-row">
+        <div class="field">
+          <label>Modelo de análisis</label>
+          <select id="s-model">
+            <option value="llama3.1:8b">llama3.1:8b (Velocidad M4)</option>
+            <option value="qwen2.5:14b">qwen2.5:14b (Equilibrado)</option>
+            <option value="qwen2.5:32b">qwen2.5:32b (Potencia Máxima)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Threshold duplicados</label>
+          <input type="number" id="s-threshold" min="0.8" max="0.99" step="0.01" value="0.92" />
+        </div>
+      </div>
+      <button class="btn btn-primary" onclick="saveSettings()"><span>✓</span> Aplicar Cambios</button>
+    </div>
+
+    <div class="mobile-card">
+      <div class="card-title">🌍 Acceso Remoto</div>
+      <div style="font-size:12px;color:var(--text2);margin-bottom:6px;">Túnel público (cualquier red, cualquier lugar):</div>
+      <div class="mobile-url" id="tunnel-url" style="font-size:13px;">cargando...</div>
+      <div style="font-size:12px;color:var(--text2);margin:10px 0 4px;">Red local (solo WiFi):</div>
+      <div class="mobile-url" id="mobile-url" style="font-size:12px;color:var(--text2);">cargando...</div>
+      <div class="mobile-steps">
+        <div class="mobile-step">
+          <div class="step-num">1</div>
+          <span>Instalá Cloudflare Tunnel: <code style="color:var(--cyan);">brew install cloudflared</code></span>
+        </div>
+        <div class="mobile-step">
+          <div class="step-num">2</div>
+          <span>Iniciá Jarvis con el flag: <code style="color:var(--cyan);">python3.12 jarvis_scanner.py --tunnel</code></span>
+        </div>
+        <div class="mobile-step">
+          <div class="step-num">3</div>
+          <span>La URL pública aparece arriba. Funciona desde <strong style="color:var(--text1)">cualquier red, en cualquier lugar.</strong></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Instrucciones de Uso</div>
+      <div style="font-family:var(--mono);font-size:12px;color:var(--text2);line-height:2;">
+        <div style="color:var(--text3);margin-bottom:8px;"># Instalar dependencias:</div>
+        <div style="color:var(--cyan);">pip3.12 install flask flask-cors PyMuPDF pymupdf4llm requests chromadb huey --break-system-packages</div>
+        <div style="color:var(--text3);margin:12px 0 8px;"># OCR Matemático Básico (Vía Ollama):</div>
+        <div style="color:var(--cyan);">ollama pull llava:7b</div>
+        <div style="color:var(--text3);margin:12px 0 8px;"># OCR Matemático Avanzado (Alta Fidelidad - Opcional):</div>
+        <div style="color:var(--cyan);">pip3.12 install marker-pdf --break-system-packages</div>
+        <div style="color:var(--text3);margin:12px 0 8px;"># Iniciar servidor con túnel remoto:</div>
+        <div style="color:var(--cyan);">python3.12 jarvis_scanner.py --tunnel</div>
+        <div style="color:var(--text3);margin:12px 0 8px;"># Sin túnel (solo red local):</div>
+        <div style="color:var(--cyan);">python3.12 jarvis_scanner.py</div>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<!-- ─── PANEL RIGHT (LOG) ─── -->
+<div class="panel-right">
+  <div class="panel-header">
+    <span>⬡</span> Log en tiempo real
+    <div style="flex:1"></div>
+    <button onclick="clearLog()" style="background:none;border:none;color:var(--text3);cursor:pointer;font-size:11px;">limpiar</button>
+  </div>
+  <div class="log-container" id="log-container">
+    <div class="empty">
+      <div>El log aparecerá aquí durante el scan</div>
+    </div>
+  </div>
+</div>
+
+</div><!-- /.app -->
+
+<!-- JS modularizado -->
+<script src="/static/js/dashboard.js?v=3"></script>
+</body>
+</html>
