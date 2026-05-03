@@ -66,9 +66,12 @@ async function checkOllama() {
 async function loadVaults() {
   const sel = document.getElementById('vault-path');
   if (!sel) return;
+  const currentVal = sel.value; // Guardar lo que ya esté puesto por loadConfig
+
   try {
     const r = await fetch(`${API}/vaults`);
     const d = await r.json();
+    
     if (d.vaults && d.vaults.length > 0) {
       sel.innerHTML = '';
       d.vaults.forEach(v => {
@@ -77,11 +80,26 @@ async function loadVaults() {
         opt.textContent = `${v.name} (${v.path})`;
         sel.appendChild(opt);
       });
+
+      // Restaurar el valor guardado si existe en la nueva lista
+      if (currentVal) {
+        let exists = false;
+        for (let i=0; i<sel.options.length; i++) {
+          if (sel.options[i].value === currentVal) { exists = true; break; }
+        }
+        if (!exists) {
+          const opt = document.createElement('option');
+          opt.value = currentVal;
+          opt.textContent = `Guardado: ${currentVal}`;
+          sel.appendChild(opt);
+        }
+        sel.value = currentVal;
+      }
     } else {
-      sel.innerHTML = '<option value="">No se encontraron vaults</option>';
+      if (!currentVal) sel.innerHTML = '<option value="">No se encontraron vaults</option>';
     }
   } catch (e) {
-    sel.innerHTML = '<option value="">Error al cargar vaults</option>';
+    console.warn("Error cargando vaults:", e);
   }
 }
 

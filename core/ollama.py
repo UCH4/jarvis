@@ -386,15 +386,15 @@ Prioridad: Vault > Herramientas > Conocimiento General. (M4 Pro Neural Engine Mo
             # Si la IA respondió con texto ADEMÁS de la tool call (o en lugar de), lo mostramos
             content = message.get("content", "")
             if content:
-                # Filtrar cualquier bloque que parezca un JSON de herramienta o ruido de formato
-                clean_content = re.sub(r'\{[\s\S]*?"name"[\s\S]*?\}', '', content)
-                # Eliminar "Respuesta: { ... }" o llaves de cierre accidentales
-                clean_content = re.sub(r'Respuesta:?\s*\{?', '', clean_content, flags=re.I).strip()
-                clean_content = clean_content.replace('Respuesta en formato JSON', '').strip()
+                # Filtrar SOLAMENTE bloques que son claramente JSON de herramientas (contienen "name" y llaves)
+                clean_content = re.sub(r'\{[^{}]*?"name"[^{}]*?\}', '', content)
                 
-                # Si el modelo sigue enviando una llave de cierre al final del texto
-                if clean_content.endswith('}'):
-                    clean_content = clean_content[:-1].strip()
+                # Eliminar el prefijo "Respuesta:" solo si está al principio y seguido de llaves
+                clean_content = re.sub(r'^Respuesta:?\s*\{', '', clean_content, flags=re.I).strip()
+                
+                # Quitar llaves de cierre que queden huérfanas al final de la respuesta
+                if clean_content.count('{') < clean_content.count('}'):
+                    clean_content = clean_content.rstrip('}').strip()
 
                 if clean_content:
                     full_answer += clean_content + " "
