@@ -26,26 +26,37 @@ def buscar_en_vault(query: str, vault_path: str, top_k: int = 5) -> list:
         seen_snippets = set()
         
         for q in queries:
-            # Pedimos más resultados (20) para que el reranker tenga material de alta calidad
-            results = collection.query(query_texts=[q], n_results=20)
-            if not results['documents'] or not results['documents'][0]:
-                continue
-                
-            for i in range(len(results['documents'][0])):
-                snippet  = results['documents'][0][i]
-                if snippet in seen_snippets: continue
-                
-                metadata = results['metadatas'][0][i]
-                distance = results['distances'][0][i] if 'distances' in results and results['distances'] else 0
-                score    = round(1.0 / (1.0 + distance), 3)
+            # 3A. Recuperación Semántica (ChromaDB)
+            results = collection.query(query_texts=[q], n_results=15)
+            if results['documents'] and results['documents'][0]:
+                for i in range(len(results['documents'][0])):
+                    snippet  = results['documents'][0][i]
+                    if snippet in seen_snippets: continue
+                    
+                    metadata = results['metadatas'][0][i]
+                    distance = results['distances'][0][i] if 'distances' in results and results['distances'] else 0
+                    score    = round(1.0 / (1.0 + distance), 3)
 
-                all_results.append({
-                    "path": metadata.get("path", ""),
-                    "title": metadata.get("title", "Documento"),
-                    "snippet": snippet,
-                    "score": score
-                })
-                seen_snippets.add(snippet)
+                    all_results.append({
+                        "path": metadata.get("path", ""),
+                        "title": metadata.get("title", "Documento"),
+                        "snippet": snippet,
+                        "score": score
+                    })
+                    seen_snippets.add(snippet)
+
+        # 3B. Recuperación Léxica (BM25)
+        try:
+            from core.hybrid_search import get_bm25_top_k, reciprocal_rank_fusion
+            bm25_res = get_bm25_top_k(query, top_k=15)
+            
+            if bm25_res:
+                # Fusión RRF
+                all_results = reciprocal_rank_fusion(all_results, bm25_res)
+                log(f"Búsqueda Híbrida completada: {len(all_results)} candidatos fusionados.", "info")
+        except Exception as e:
+            log(f"Error en BM25 (cayendo a búsqueda puramente semántica): {e}", "warn")
+
         
         # 4. Re-ranking (LLM-as-a-judge)
         if all_results:

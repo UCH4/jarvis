@@ -29,3 +29,9 @@ Thumbs.db
 
 # Scratch/temp
 scratch/
+
+venv_pro/
+env/
+__pycache__/
+.DS_Store
+*.pyc

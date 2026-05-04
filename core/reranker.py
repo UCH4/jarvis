@@ -39,18 +39,8 @@ def rerank(query: str, candidates: List[Dict], model: str = None, top_k: int = 3
             "\nResponde SOLO con el número (0-10)."
         )
         try:
-            import requests
-            r = requests.post(
-                f"{OLLAMA_URL}/api/generate",
-                json={
-                    "model": model,
-                    "prompt": prompt,
-                    "stream": False,
-                    "options": {"temperature": 0.0, "num_predict": 5},
-                },
-                timeout=30,
-            )
-            resp = r.json().get("response", "").strip()
+            from core.mlx_inference import generate_text
+            resp = generate_text(prompt, max_tokens=5, temperature=0.0)
             # Extract first integer found
             match = re.search(r"(\d+)", resp)
             score = int(match.group(1)) if match else 0

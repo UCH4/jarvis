@@ -219,7 +219,18 @@ try:
             return Response(stream_with_context(error_stream()), content_type='application/x-ndjson')
 
         from flask import Response, stream_with_context
-        return Response(stream_with_context(chat_con_vault(question, vault_path, model, mode)), content_type='application/x-ndjson')
+        
+        def safe_chat_generator():
+            try:
+                for chunk in chat_con_vault(question, vault_path, model, mode):
+                    yield chunk
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                import json
+                yield json.dumps({"type": "error", "content": f"Fallo interno del servidor: {str(e)}"}) + "\n"
+        
+        return Response(stream_with_context(safe_chat_generator()), content_type='application/x-ndjson')
 
     # ─── Modo Profesor: Ejercicios y Flashcards ───────────────
     @app.route("/api/exercise", methods=["POST"])

@@ -204,3 +204,24 @@ def get_existing_topics_from_vault(vault_path: str) -> list:
     if not vault.exists():
         return []
     return [md.stem for md in vault.rglob("*.md")][:60]
+
+def get_local_graph_context(vault_path: str, note_names: list) -> str:
+    """Extrae las conexiones de un conjunto de notas para inyectarlas en el LLM (Graph Mind)."""
+    graph = get_vault_graph(vault_path)
+    edges = graph.get("edges", [])
+    
+    connections = []
+    # Usar set para desduplicar
+    unique_notes = set(note_names)
+    
+    for node in unique_notes:
+        targets = set([e["to"] for e in edges if e["from"] == node])
+        sources = set([e["from"] for e in edges if e["to"] == node])
+        
+        all_related = targets.union(sources) - {node}
+        if all_related:
+            connections.append(f"- La nota '{node}' está directamente conectada conceptualmente con: {', '.join(all_related)}")
+            
+    if connections:
+        return "\n=== CONEXIONES DEL GRAFO DE OBSIDIAN (GRAPH MIND) ===\n" + "\n".join(connections) + "\n======================================================\n"
+    return ""

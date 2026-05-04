@@ -66,7 +66,42 @@ def search_internet(query: str) -> str:
     except Exception as e:
         return f"Error en búsqueda web (Mac Network): {e}"
 
-# Esquema de herramientas para Ollama
+def read_obsidian_note(note_name: str) -> str:
+    """Busca una nota en el vault por su nombre (parcial o total) y devuelve su contenido."""
+    from core.config import load_config
+    import os
+    cfg = load_config()
+    vault = cfg.get("vault_path")
+    if not vault: return "Error: Vault no configurado."
+    
+    for root, dirs, files in os.walk(vault):
+        for f in files:
+            if f.endswith(".md") and (note_name.lower() in f.lower()):
+                path = os.path.join(root, f)
+                return read_local_file(path)
+    return f"Error: No se encontró la nota '{note_name}' en el Vault."
+
+def create_exercise(topic: str, content: str) -> str:
+    """Crea un archivo Markdown en la raíz del Vault con un ejercicio o desafío."""
+    from core.config import load_config
+    import os
+    cfg = load_config()
+    vault = cfg.get("vault_path")
+    if not vault: return "Error: Vault no configurado."
+    
+    safe_topic = "".join([c if c.isalnum() else "_" for c in topic])
+    filename = f"Reto_{safe_topic}.md"
+    filepath = os.path.join(vault, filename)
+    
+    try:
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(f"# Reto de Estudio: {topic}\n\n{content}\n")
+        return f"Éxito: Archivo '{filename}' creado en el Vault. Dile al usuario que lo revise en Obsidian."
+    except Exception as e:
+        return f"Error al crear el archivo: {e}"
+
+# Esquema de herramientas para Ollama/MLX
+
 OLLAMA_TOOLS_SCHEMA = [
     {
         "type": "function",
@@ -118,6 +153,44 @@ OLLAMA_TOOLS_SCHEMA = [
                 "required": ["query"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_obsidian_note",
+            "description": "Lee el contenido completo de una nota específica de Obsidian si necesitas más contexto sobre ella.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "note_name": {
+                        "type": "string",
+                        "description": "Nombre de la nota a buscar (ej: 'Física 1', 'Maimará')"
+                    }
+                },
+                "required": ["note_name"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_exercise",
+            "description": "Genera un archivo Markdown de Reto/Ejercicio directamente en el Vault de Obsidian del usuario.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topic": {
+                        "type": "string",
+                        "description": "El tema principal del reto (ej: 'Derivadas', 'Salud Pública')"
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "El contenido del ejercicio en formato Markdown con preguntas, espacios para responder, etc."
+                    }
+                },
+                "required": ["topic", "content"]
+            }
+        }
     }
 ]
 
@@ -132,5 +205,9 @@ def execute_tool(tool_call) -> str:
         return read_local_file(args.get("path", ""))
     elif name == "search_internet":
         return search_internet(args.get("query", ""))
+    elif name == "read_obsidian_note":
+        return read_obsidian_note(args.get("note_name", ""))
+    elif name == "create_exercise":
+        return create_exercise(args.get("topic", ""), args.get("content", ""))
     else:
         return f"Error: Herramienta '{name}' desconocida."

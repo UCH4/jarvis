@@ -155,14 +155,12 @@ def expand_query(query: str) -> list:
         "Responde solo con las 2 variaciones, una por línea."
     )
     try:
-        r = requests.post(
-            f"{OLLAMA_URL}/api/generate",
-            json={"model": ANALYSIS_MODEL, "prompt": prompt, "stream": False, "options": {"temperature": 0.2, "num_predict": 60}},
-            timeout=20
-        )
-        text = r.json().get("response", "").strip()
+        from core.mlx_inference import generate_text
+        text = generate_text(prompt, max_tokens=60, temperature=0.2)
         return [query] + [v.strip("- ").strip() for v in text.split("\n") if v.strip()][:2]
-    except:
+    except Exception as e:
+        from core.logger import log
+        log(f"Error expand_query MLX: {e}", "warn")
         return [query]
 
 def generate_hyde_doc(query: str) -> str:
@@ -172,13 +170,12 @@ def generate_hyde_doc(query: str) -> str:
         "Usa lenguaje formal y conceptos clave. No saludes, no expliques, solo escribe el apunte."
     )
     try:
-        r = requests.post(
-            f"{OLLAMA_URL}/api/generate",
-            json={"model": ANALYSIS_MODEL, "prompt": prompt, "stream": False, "options": {"temperature": 0.1, "num_predict": 150}},
-            timeout=30
-        )
-        return r.json().get("response", "").strip()
-    except:
+        from core.mlx_inference import generate_text
+        text = generate_text(prompt, max_tokens=150, temperature=0.1)
+        return text
+    except Exception as e:
+        from core.logger import log
+        log(f"Error generate_hyde_doc MLX: {e}", "warn")
         return query
 
 def analyze_content(text: str, existing_topics: list = None, model: str = None) -> dict:
@@ -287,6 +284,15 @@ def chat_con_vault(question: str, vault_path: str, model: str = None, mode: str 
             f"--- [Fuente {i}] ---\nTÍTULO: {d['title']}\nRUTA: {d['path']}\nCONTENIDO: {d['snippet']}"
             for i, d in enumerate(docs, 1)
         ]
+        
+        # Inyectar Graph Mind
+        from core.obsidian import get_local_graph_context
+        note_names = [d["title"] for d in docs]
+        graph_context = get_local_graph_context(vault_path, note_names)
+        
+        if graph_context:
+            context_parts.append(graph_context)
+            
         context_text = "\n\n".join(context_parts)
         sources      = [{"title": d["title"], "path": d["path"], "score": d["score"]} for d in docs]
 
@@ -374,63 +380,71 @@ Estás diseñado para asistir al usuario con rigor científico, profundidad anal
         full_answer = ""
         max_tool_iterations = 3
         for iteration in range(max_tool_iterations):
-            r = requests.post(
-                f"{OLLAMA_URL}/api/chat",
-                json={
-                    "model":   m,
-                    "messages": messages,
-                    "tools": active_tools if active_tools else None,
-                    "stream":  False,
-                    "options": {
-                        "temperature": 0.1,
-                        "num_ctx": 32768,
-                        "num_thread": 10,
-                        "cache_prompt": config.get("prefix_cache", True)
-                    },
-                },
-                timeout=300
-            )
+            try:
+                from core.mlx_inference import get_mlx_model
+                import mlx_lm
+                model, tokenizer = get_mlx_model()
+                
+                # Inyectar tools al system prompt si hay
+                sys_msg_idx = next((i for i, m in enumerate(messages) if m["role"] == "system"), -1)
+                original_sys_content = messages[sys_msg_idx]["content"] if sys_msg_idx != -1 else ""
+                
+                if active_tools and sys_msg_idx != -1:
+                    tools_str = json.dumps([t["function"] for t in active_tools], indent=2, ensure_ascii=False)
+                    tool_prompt = (
+                        f"\n\nTIENES ACCESO A LAS SIGUIENTES HERRAMIENTAS:\n{tools_str}\n"
+                        "Si necesitas usar una herramienta, DEBES responder ÚNICAMENTE con un bloque JSON "
+                        "con este formato estricto:\n"
+                        "{\"name\": \"nombre_herramienta\", \"parameters\": {\"param1\": \"valor\"}}\n"
+                        "NO ESCRIBAS NADA MÁS ALREDEDOR DEL JSON."
+                    )
+                    messages[sys_msg_idx]["content"] = original_sys_content + tool_prompt
 
-            if r.status_code != 200:
-                err_msg = r.json().get("error", f"HTTP {r.status_code}")
-                yield json.dumps({"type": "error", "content": f"Fallo en Ollama: {err_msg}. Sugerencia: El modelo '{m}' podría no soportar herramientas. Probá con llama3.1 o qwen2.5."}) + "\n"
+                prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+                
+                # Restaurar el system prompt original para no acumular el texto de las tools
+                if sys_msg_idx != -1:
+                    messages[sys_msg_idx]["content"] = original_sys_content
+
+                response_text = ""
+                is_json_tool = False
+                
+                # Stream nativo MLX
+                for chunk in mlx_lm.stream_generate(model, tokenizer, prompt, max_tokens=2048):
+                    response_text += chunk
+                    
+                    # Heurística para no streamear JSON de tools al usuario
+                    if len(response_text) < 10 and response_text.strip().startswith("{"):
+                        is_json_tool = True
+                        continue
+                        
+                    if not is_json_tool:
+                        # Yield al frontend (limpieza quirúrgica si es el inicio)
+                        if len(response_text) == len(chunk): # Primer chunk
+                            chunk = re.sub(r'^(Respuesta|Jarvis|Assistant):\s*', '', chunk, flags=re.I)
+                        if chunk.strip():
+                            full_answer += chunk
+                            yield json.dumps({"type": "chunk", "content": chunk}) + "\n"
+
+                message = {"role": "assistant", "content": response_text.strip()}
+                messages.append(message)
+
+                content = message["content"]
+                tool_calls = []
+
+                # Parsear tool si detectamos que es JSON
+                if is_json_tool or ('{' in content and '"name"' in content):
+                    parsed_tc = _try_parse_tool_from_text(content)
+                    if parsed_tc:
+                        tool_calls = [parsed_tc]
+
+            except Exception as e:
+                from core.logger import log
+                log(f"Fallo en MLX inference: {e}", "error")
+                yield json.dumps({"type": "error", "content": f"Fallo en MLX: {e}"}) + "\n"
                 break
 
-            response_data = r.json()
-            message = response_data.get("message", {})
-            messages.append(message)
-
-            # ── Procesar contenido de texto ──
-            content = message.get("content", "")
-            tool_calls = message.get("tool_calls") or []
-
-            # FALLBACK TOOL PARSER: Si el modelo escribió un tool call en el texto
-            # en vez de usar el canal tool_calls (bug conocido de Llama 3.1),
-            # lo detectamos, lo parseamos y lo ejecutamos como si fuera real.
-            if content and not tool_calls and '{' in content and '"name"' in content:
-                parsed_tc = _try_parse_tool_from_text(content)
-                if parsed_tc:
-                    tool_calls = [parsed_tc]
-                    # Extraer el texto humano que hay ANTES del JSON
-                    json_start = content.find('{')
-                    human_text = content[:json_start].strip()
-                    if human_text:
-                        full_answer += human_text + " "
-                        yield json.dumps({"type": "chunk", "content": human_text}) + "\n"
-                    content = ""  # Ya procesamos todo
-
-            # Mostrar texto humano (si hay y no fue consumido por el fallback)
-            if content:
-                # Limpieza quirúrgica de headers que Llama suele repetir
-                clean_content = content.strip()
-                clean_content = re.sub(r'^(Respuesta|Jarvis|Assistant):\s*', '', clean_content, flags=re.I)
-                clean_content = clean_content.strip()
-
-                if clean_content:
-                    full_answer += clean_content + " "
-                    yield json.dumps({"type": "chunk", "content": clean_content}) + "\n"
-
-            # ── Procesar tool calls (reales o parseadas del fallback) ──
+            # ── Procesar tool calls ──
             if tool_calls:
                 for tc in tool_calls:
                     func_name = tc.get("function", {}).get("name")
