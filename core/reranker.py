@@ -28,12 +28,15 @@ def rerank(query: str, candidates: List[Dict], model: str = None, top_k: int = 3
         title = cand.get("title", "")
         path = cand.get("path", "")
         prompt = (
-            f"User query: {query}\n"
-            f"Document title: {title}\n"
-            f"Document path: {path}\n"
-            f"Snippet: {snippet}\n\n"
-            "Rate the relevance of this snippet to the query on a scale from 0 (not relevant) to 10 (highly relevant)."
-            " Respond with only the integer score."
+            f"### SISTEMA: Sos un Evaluador de Relevancia Crítico.\n"
+            f"### CONSULTA DEL USUARIO: {query}\n"
+            f"### DOCUMENTO: {title} ({path})\n"
+            f"### FRAGMENTO: {snippet}\n\n"
+            "INSTRUCCIÓN: Evalúa si este fragmento contiene información específica, hechos o datos para responder a la consulta."
+            "\n0: Irrelevante / Ruido / Sin datos."
+            "\n5: Relacionado pero vago o incompleto."
+            "\n10: Contiene la respuesta exacta o datos clave."
+            "\nResponde SOLO con el número (0-10)."
         )
         try:
             import requests

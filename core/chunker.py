@@ -1,7 +1,7 @@
 import re
 from typing import List, Dict
 
-def markdown_aware_chunks(text: str, title: str = "", chunk_size: int = 1500, overlap: int = 200) -> List[Dict[str, str]]:
+def markdown_aware_chunks(text: str, title: str = "", chunk_size: int = 1600, overlap: int = 300) -> List[Dict[str, str]]:
     """Split markdown text into chunks aware of headings.
 
     Each chunk is a dict with keys:

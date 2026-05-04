@@ -26,8 +26,8 @@ def buscar_en_vault(query: str, vault_path: str, top_k: int = 5) -> list:
         seen_snippets = set()
         
         for q in queries:
-            # Pedimos más resultados de los necesarios para que el reranker tenga material
-            results = collection.query(query_texts=[q], n_results=max(10, top_k * 2))
+            # Pedimos más resultados (20) para que el reranker tenga material de alta calidad
+            results = collection.query(query_texts=[q], n_results=20)
             if not results['documents'] or not results['documents'][0]:
                 continue
                 

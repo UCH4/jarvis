@@ -149,12 +149,15 @@ def ocr_page_vision(page, vision_model: str, page_num: int) -> str:
 # ─── AGENTE DE RAZONAMIENTO AVANZADO (RAG+) ────────────────────
 
 def expand_query(query: str) -> list:
-    """Genera variaciones de búsqueda rápidas."""
-    prompt = f"Variaciones de búsqueda para: {query}\nResponde con 3 líneas breves:"
+    \"\"\"Genera variaciones de búsqueda orientadas a conceptos académicos.\"\"\"
+    prompt = (
+        f"Dada la consulta: '{query}', genera 2 variaciones de búsqueda que usen terminología académica técnica. "
+        "Responde solo con las 2 variaciones, una por línea."
+    )
     try:
         r = requests.post(
             f"{OLLAMA_URL}/api/generate",
-            json={"model": ANALYSIS_MODEL, "prompt": prompt, "stream": False, "options": {"temperature": 0.2, "num_predict": 50}},
+            json={"model": ANALYSIS_MODEL, "prompt": prompt, "stream": False, "options": {"temperature": 0.2, "num_predict": 60}},
             timeout=20
         )
         text = r.json().get("response", "").strip()
@@ -163,12 +166,15 @@ def expand_query(query: str) -> list:
         return [query]
 
 def generate_hyde_doc(query: str) -> str:
-    """HyDE rápido para matching semántico."""
-    prompt = f"Responde brevemente a: {query}\n(Solo párrafos técnicos):"
+    \"\"\"HyDE: Genera un fragmento hipotético de un apunte para mejorar el matching semántico.\"\"\"
+    prompt = (
+        f"Escribe un párrafo técnico y denso en información que podrías encontrar en un apunte universitario sobre: {query}. "
+        "Usa lenguaje formal y conceptos clave. No saludes, no expliques, solo escribe el apunte."
+    )
     try:
         r = requests.post(
             f"{OLLAMA_URL}/api/generate",
-            json={"model": ANALYSIS_MODEL, "prompt": prompt, "stream": False, "options": {"temperature": 0.1, "num_predict": 100}},
+            json={"model": ANALYSIS_MODEL, "prompt": prompt, "stream": False, "options": {"temperature": 0.1, "num_predict": 150}},
             timeout=30
         )
         return r.json().get("response", "").strip()
@@ -274,26 +280,37 @@ def chat_con_vault(question: str, vault_path: str, model: str = None, mode: str 
     docs = buscar_en_vault(question, vault_path, top_k=5)
 
     if not docs:
-        context_text = "(No se encontraron notas relevantes en el vault para esta pregunta)"
+        context_text = "(No se encontraron notas relevantes en el vault para esta pregunta. Usa internet si es necesario o responde con tu conocimiento base aclarando la falta de fuentes locales.)"
         sources      = []
     else:
         context_parts = [
-            f"--- Fuente {i}: [{d['title']}] (Ruta exacta: {d['path']}) ---\n{d['snippet']}"
+            f"--- [Fuente {i}] ---\nTÍTULO: {d['title']}\nRUTA: {d['path']}\nCONTENIDO: {d['snippet']}"
             for i, d in enumerate(docs, 1)
         ]
         context_text = "\n\n".join(context_parts)
         sources      = [{"title": d["title"], "path": d["path"], "score": d["score"]} for d in docs]
 
-    prompt_standard = """Sos Jarvis, el arquitecto de conocimiento del usuario. Estás corriendo en una Mac M4 Pro de alto rendimiento.
+    prompt_standard = """Sos JARVIS (Knowledge Architect), un sistema experto en análisis académico y gestión de conocimiento local.
+Estás diseñado para asistir al usuario con rigor científico, profundidad analítica y precisión quirúrgica.
 
-DIRECTIVAS MAESTRAS DE RAZONAMIENTO:
-1. EL VAULT ES TU CEREBRO: Toda la información necesaria para responder suele estar en el 'CONTEXTO DEL VAULT'. Analizalo con profundidad quirúrgica. Si la respuesta está ahí, USALA y no busques en internet.
-2. HERRAMIENTAS (ULTRA-PRECISIÓN): Solo usá 'search_internet' si el Vault no tiene la información. Solo usá 'execute_mac_command' si necesitás datos técnicos del sistema o archivos específicos.
-3. PROHIBIDO ALUCINAR: Si no sabés algo y no está en el Vault, buscalo o preguntale al usuario. Nunca inventes rutas de archivos.
-4. ESTILO: Profesional, conciso y académico. Usá LaTeX ($...$) para matemáticas.
-5. SILENCIO JSON TOTAL: Nunca, bajo ninguna circunstancia, escribas llaves { } o etiquetas "Respuesta:" en el chat. Tu salida debe ser puro texto legible o Markdown. Si usas herramientas, hazlo en silencio.
+### REGLAS MAESTRAS DE RAZONAMIENTO:
+1. **ANCLAJE AL VAULT (PRIORIDAD ALFA)**: Tu conocimiento primario reside en el 'CONTEXTO DEL VAULT' proporcionado. 
+   - No alucines. Si la información no está en el vault ni en internet, admítelo.
+   - Si la información en el vault es contradictoria, resáltalo.
+2. **CITACIÓN OBLIGATORIA**: Cada vez que afirmes algo basado en el vault, DEBES citar la fuente usando [ID] (ej: [Fuente 1], [Fuente 2]).
+3. **RAZONAMIENTO PASO A PASO (CoT)**: Antes de dar tu respuesta final, analiza internamente la relación entre los fragmentos recuperados para construir una síntesis coherente.
+4. **ESTILO ACADÉMICO**:
+   - Sé detallado y exhaustivo. Evita respuestas vagas o cortas.
+   - Usa Markdown (negritas, listas, tablas) para estructurar la información.
+   - Usa LaTeX ($...$) para fórmulas o términos matemáticos.
+5. **HERRAMIENTAS**: 
+   - Usa 'search_internet' solo si el vault no tiene la respuesta o si necesitas actualidad.
+   - No menciones el uso de herramientas en el texto final; úsalas de forma integrada.
 
-Prioridad: Vault > Herramientas > Conocimiento General. (M4 Pro Neural Engine Mode)"""
+### PROTOCOLO DE SALIDA:
+- Prohibido empezar con "Respuesta:", "De acuerdo al vault...", o frases similares. Ve directo al conocimiento.
+- Prohibido el uso de JSON en el chat humano.
+- Idioma: Español (neutro/académico)."""
 
     if mode == "professor":
         prompt_system = SOCRATIC_SYSTEM_PROMPT
@@ -404,7 +421,11 @@ Prioridad: Vault > Herramientas > Conocimiento General. (M4 Pro Neural Engine Mo
 
             # Mostrar texto humano (si hay y no fue consumido por el fallback)
             if content:
+                # Limpieza quirúrgica de headers que Llama suele repetir
                 clean_content = content.strip()
+                clean_content = re.sub(r'^(Respuesta|Jarvis|Assistant):\s*', '', clean_content, flags=re.I)
+                clean_content = clean_content.strip()
+
                 if clean_content:
                     full_answer += clean_content + " "
                     yield json.dumps({"type": "chunk", "content": clean_content}) + "\n"
