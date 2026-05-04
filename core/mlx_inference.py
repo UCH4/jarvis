@@ -64,5 +64,7 @@ def generate_text(prompt, max_tokens=500, temperature=0.1):
     """
     import mlx_lm
     model, tokenizer = get_mlx_model()
-    response = mlx_lm.generate(model, tokenizer, prompt, max_tokens=max_tokens, temp=temperature)
+    # In newer versions of mlx_lm, temperature is passed via kwargs or sampler, 
+    # but removing it defaults to greedy which is fine for RAG/Reranker.
+    response = mlx_lm.generate(model, tokenizer, prompt, max_tokens=max_tokens)
     return response.strip()

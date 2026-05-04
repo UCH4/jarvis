@@ -410,8 +410,9 @@ Estás diseñado para asistir al usuario con rigor científico, profundidad anal
                 is_json_tool = False
                 
                 # Stream nativo MLX
-                for chunk in mlx_lm.stream_generate(model, tokenizer, prompt, max_tokens=2048):
-                    response_text += chunk
+                for chunk_obj in mlx_lm.stream_generate(model, tokenizer, prompt, max_tokens=2048):
+                    chunk_text = chunk_obj.text
+                    response_text += chunk_text
                     
                     # Heurística para no streamear JSON de tools al usuario
                     if len(response_text) < 10 and response_text.strip().startswith("{"):
@@ -420,11 +421,11 @@ Estás diseñado para asistir al usuario con rigor científico, profundidad anal
                         
                     if not is_json_tool:
                         # Yield al frontend (limpieza quirúrgica si es el inicio)
-                        if len(response_text) == len(chunk): # Primer chunk
-                            chunk = re.sub(r'^(Respuesta|Jarvis|Assistant):\s*', '', chunk, flags=re.I)
-                        if chunk.strip():
-                            full_answer += chunk
-                            yield json.dumps({"type": "chunk", "content": chunk}) + "\n"
+                        if len(response_text) == len(chunk_text): # Primer chunk
+                            chunk_text = re.sub(r'^(Respuesta|Jarvis|Assistant):\s*', '', chunk_text, flags=re.I)
+                        if chunk_text.strip():
+                            full_answer += chunk_text
+                            yield json.dumps({"type": "chunk", "content": chunk_text}) + "\n"
 
                 message = {"role": "assistant", "content": response_text.strip()}
                 messages.append(message)
