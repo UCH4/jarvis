@@ -32,10 +32,10 @@ jarvis/
 
 ## Instalación (Mac M4 Pro)
 
-Para que Jarvis funcione al 100% en tu Mac M4 Pro, ejecutá este comando para instalar todas las dependencias necesarias:
+Para que Jarvis funcione al 100% en tu Mac M4 Pro con la arquitectura nativa (ARM), ejecutá este comando:
 
 ```bash
-pip3.12 install --break-system-packages flask flask-cors requests beautifulsoup4 chromadb pymupdf huey watchdog
+python3 -m pip install --break-system-packages flask flask-cors requests beautifulsoup4 chromadb pymupdf huey watchdog
 ```
 
 ### 🧠 Cerebros Requeridos (Ollama)
@@ -60,16 +60,16 @@ brew install cloudflared
 
 ```bash
 # Servidor web + túnel remoto (acceso desde cualquier red)
-python3.12 jarvis_scanner.py --tunnel
+python3 jarvis_scanner.py --tunnel
 
 # Solo servidor web (red local)
-python3.12 jarvis_scanner.py
+python3 jarvis_scanner.py
 
 # Scan directo desde terminal
-python3.12 jarvis_scanner.py --scan /ruta/pdfs --vault /ruta/vault
+python3 jarvis_scanner.py --scan /ruta/pdfs --vault /ruta/vault
 
 # Modo CLI interactivo
-python3.12 jarvis_scanner.py --cli
+python3 jarvis_scanner.py --cli
 ```
 
 ## Stack Tecnológico
