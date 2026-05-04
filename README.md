@@ -30,17 +30,30 @@ jarvis/
     └── js/dashboard.js     ← Lógica del dashboard
 ```
 
-## Instalación
+## Instalación (Mac M4 Pro)
+
+Para que Jarvis funcione al 100% en tu Mac M4 Pro, ejecutá este comando para instalar todas las dependencias necesarias:
 
 ```bash
-# 1. Dependencias Python (usar python3.12, NO el 3.9 del sistema)
-pip3.12 install flask flask-cors PyMuPDF pymupdf4llm requests --break-system-packages
+pip3.12 install --break-system-packages flask flask-cors requests beautifulsoup4 chromadb pymupdf huey watchdog
+```
 
-# 2. Cloudflare Tunnel (para acceso remoto desde cualquier red)
+### 🧠 Cerebros Requeridos (Ollama)
+
+Necesitás tener estos modelos instalados en Ollama para que el sistema funcione:
+
+```bash
+ollama pull llama3.1          # Chat y razonamiento (8b)
+ollama pull llama3.2-vision   # OCR de fórmulas matemáticas
+ollama pull nomic-embed-text  # Embeddings del vault (RAG)
+```
+
+### 📡 Acceso Remoto (Opcional)
+
+Si vas a usar el flag `--tunnel` para acceder desde fuera de tu casa:
+
+```bash
 brew install cloudflared
-
-# 3. Modelo de visión para OCR de fórmulas (ya lo tenés)
-# ollama pull llava:7b   ← ya instalado
 ```
 
 ## Uso
@@ -61,15 +74,16 @@ python3.12 jarvis_scanner.py --cli
 
 ## Stack Tecnológico
 
-| Componente       | Tecnología                        |
-|------------------|-----------------------------------|
-| Backend          | Python 3.12 + Flask               |
-| IA local         | Ollama (qwen2.5:14b)              |
-| OCR de fórmulas  | llava:7b (visión computacional)   |
-| Embeddings       | nomic-embed-text                  |
-| Vault            | Obsidian (.md con frontmatter)    |
-| Acceso remoto    | Cloudflare Tunnel                 |
-| Fórmulas en UI   | MathJax 3                         |
+| Componente       | Tecnología                             |
+|------------------|----------------------------------------|
+| Backend          | Python 3.12 + Flask                    |
+| IA Razonamiento  | Ollama (llama3.1)                      |
+| IA Visión (OCR)  | Ollama (llama3.2-vision)               |
+| Embeddings       | nomic-embed-text                       |
+| RAG Avanzado     | HyDE + Multi-Query + LLM Reranking     |
+| Base Vectorial   | ChromaDB                               |
+| Acceso remoto    | Cloudflare Tunnel                      |
+| Fórmulas en UI   | MathJax 3                              |
 
 ## Variables de Entorno (opcional)
 

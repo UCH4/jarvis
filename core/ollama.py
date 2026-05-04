@@ -149,7 +149,7 @@ def ocr_page_vision(page, vision_model: str, page_num: int) -> str:
 # ─── AGENTE DE RAZONAMIENTO AVANZADO (RAG+) ────────────────────
 
 def expand_query(query: str) -> list:
-    \"\"\"Genera variaciones de búsqueda orientadas a conceptos académicos.\"\"\"
+    "\"\"Genera variaciones de búsqueda orientadas a conceptos académicos.\"\"\"
     prompt = (
         f"Dada la consulta: '{query}', genera 2 variaciones de búsqueda que usen terminología académica técnica. "
         "Responde solo con las 2 variaciones, una por línea."
@@ -166,7 +166,7 @@ def expand_query(query: str) -> list:
         return [query]
 
 def generate_hyde_doc(query: str) -> str:
-    \"\"\"HyDE: Genera un fragmento hipotético de un apunte para mejorar el matching semántico.\"\"\"
+    "\"\"HyDE: Genera un fragmento hipotético de un apunte para mejorar el matching semántico.\"\"\"
     prompt = (
         f"Escribe un párrafo técnico y denso en información que podrías encontrar en un apunte universitario sobre: {query}. "
         "Usa lenguaje formal y conceptos clave. No saludes, no expliques, solo escribe el apunte."
