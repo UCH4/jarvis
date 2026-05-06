@@ -161,7 +161,11 @@
             <div class="msg-bubble">Hola! Soy Jarvis. Podés preguntarme cualquier cosa sobre tus apuntes del vault. Las fórmulas matemáticas se van a mostrar correctamente. Por ejemplo: <em>"¿Qué es el inverso multiplicativo?"</em> o <em>"¿Cuándo da V la implicación p→q?"</em>.</div>
           </div>
         </div>
-        <div class="chat-input-row">
+        <div class="chat-input-row" style="position: relative;">
+          <input type="file" id="chat-file-input" style="display: none;" accept=".txt,.md,.py,.json,.csv" onchange="handleChatFileUpload(event)">
+          <button class="btn btn-ghost" onclick="document.getElementById('chat-file-input').click()" style="padding:10px; margin-right:4px;" title="Adjuntar borrador (.txt, .md)">
+            📎
+          </button>
           <textarea
             id="chat-input"
             placeholder="Preguntá algo sobre tus apuntes... (Enter para enviar, Shift+Enter para nueva línea)"

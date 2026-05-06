@@ -26,10 +26,31 @@ def get_chroma_client():
     DB_PATH.mkdir(exist_ok=True)
     return chromadb.PersistentClient(path=str(DB_PATH))
 
+class CustomOllamaEmbeddingFunction:
+    def __init__(self, url, model_name):
+        self.url = url
+        self.model_name = model_name
+
+    def __call__(self, input):
+        # Maneja tanto string único como lista de strings
+        texts = [input] if isinstance(input, str) else input
+        embeddings = []
+        import requests
+        for text in texts:
+            try:
+                r = requests.post(
+                    self.url,
+                    json={"model": self.model_name, "prompt": text},
+                    timeout=60
+                )
+                r.raise_for_status()
+                embeddings.append(r.json().get("embedding", []))
+            except Exception:
+                embeddings.append([0.0] * 768) # Fallback vector nulo
+        return embeddings
+
 def get_embedding_function():
-    # Retornamos la estándar de Chroma para evitar el error de "Conflict"
-    # El parche global de 'requests' se encargará del timeout.
-    return embedding_functions.OllamaEmbeddingFunction(
+    return CustomOllamaEmbeddingFunction(
         url=f"{OLLAMA_URL}/api/embeddings",
         model_name=EMBEDDING_MODEL
     )

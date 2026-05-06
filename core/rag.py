@@ -45,6 +45,31 @@ def buscar_en_vault(query: str, vault_path: str, top_k: int = 5) -> list:
                     })
                     seen_snippets.add(snippet)
 
+        # 3A.2. Inyección de Texto Fundacional ("La Biblia")
+        try:
+            biblia_results = collection.query(
+                query_texts=[query],
+                n_results=2,
+                where_document={"$contains": "#biblia"}
+            )
+            if biblia_results['documents'] and biblia_results['documents'][0]:
+                for i in range(len(biblia_results['documents'][0])):
+                    snippet = biblia_results['documents'][0][i]
+                    if snippet in seen_snippets: continue
+                    metadata = biblia_results['metadatas'][0][i]
+                    
+                    # Forzamos un score artificialmente alto para que la Biblia pase el reranking
+                    all_results.append({
+                        "path": metadata.get("path", ""),
+                        "title": metadata.get("title", "Documento") + " [★ TEXTO FUNDACIONAL]",
+                        "snippet": "ATENCIÓN: EL SIGUIENTE TEXTO ES UNA REGLA/METODOLOGÍA FUNDAMENTAL (#biblia) QUE DEBES APLICAR A TU RESPUESTA:\n\n" + snippet,
+                        "score": 1.5 
+                    })
+                    seen_snippets.add(snippet)
+                    log(f"Inyectado texto fundacional (#biblia) desde: {metadata.get('title', '')}", "ok")
+        except Exception as e:
+            log(f"Aviso: Fallo al buscar textos fundacionales (#biblia): {e}", "warn")
+
         # 3B. Recuperación Léxica (BM25)
         try:
             from core.hybrid_search import get_bm25_top_k, reciprocal_rank_fusion
@@ -58,11 +83,18 @@ def buscar_en_vault(query: str, vault_path: str, top_k: int = 5) -> list:
             log(f"Error en BM25 (cayendo a búsqueda puramente semántica): {e}", "warn")
 
         
-        # 4. Re-ranking (LLM-as-a-judge)
+        # 4. Re-ranking inteligente (Funnel RAG)
         if all_results:
             from core.reranker import rerank
-            log(f"Reranking {len(all_results)} fragmentos...", "info")
-            return rerank(query, all_results, top_k=top_k)
+            
+            # Ordenar por el score híbrido inicial (Vector + BM25 + Biblia)
+            all_results.sort(key=lambda x: x.get("score", 0), reverse=True)
+            
+            # Tomamos solo los mejores 15 candidatos para no saturar al LLM (Optimización M4 Pro)
+            funnel_candidates = all_results[:15]
+            
+            log(f"Reranking {len(funnel_candidates)} fragmentos de los {len(all_results)} totales...", "info")
+            return rerank(query, funnel_candidates, top_k=top_k)
         
         return []
 

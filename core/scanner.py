@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib  import Path
 
 from core.config     import ANALYSIS_MODEL
-from core.state      import scan_state, state_lock, save_state
+from core.state      import scan_state, state_lock, save_state, load_state
 from core.logger     import log
 from core.pdf        import extract_pdf_text, compute_file_hash
 from core.ollama     import get_embedding, analyze_content

@@ -9,6 +9,7 @@ import requests
 
 from core.config import OLLAMA_URL, ANALYSIS_MODEL, EMBEDDING_MODEL
 from core.state  import scan_state, state_lock
+from core.gpu import gpu_lock
 
 
 # ─── Helpers de conexión ──────────────────────────────────────
@@ -48,15 +49,16 @@ def get_vision_model():
 # ─── Embeddings ───────────────────────────────────────────────
 
 def get_embedding(text: str) -> list:
-    try:
-        r = requests.post(
-            f"{OLLAMA_URL}/api/embeddings",
-            json={"model": EMBEDDING_MODEL, "prompt": text[:2000]},
-            timeout=30,
-        )
-        return r.json().get("embedding", [])
-    except Exception:
-        return []
+    with gpu_lock("Ollama Embedding"):
+        try:
+            r = requests.post(
+                f"{OLLAMA_URL}/api/embeddings",
+                json={"model": EMBEDDING_MODEL, "prompt": text[:2000]},
+                timeout=30,
+            )
+            return r.json().get("embedding", [])
+        except Exception:
+            return []
 
 
 def cosine_similarity(a: list, b: list) -> float:
@@ -77,70 +79,71 @@ def ocr_page_vision(page, vision_model: str, page_num: int) -> str:
     Renderiza una página PDF como imagen y la manda al modelo de visión.
     Optimizado para M4 Pro y previene timeouts.
     """
-    try:
-        # Usamos un DPI balanceado para velocidad y precisión
-        pix = page.get_pixmap(dpi=160, colorspace="rgb")
-        img_b64 = base64.b64encode(pix.tobytes("png")).decode()
+    with gpu_lock("Ollama Vision OCR"):
+        try:
+            # Usamos un DPI balanceado para velocidad y precisión
+            pix = page.get_pixmap(dpi=160, colorspace="rgb")
+            img_b64 = base64.b64encode(pix.tobytes("png")).decode()
 
-        prompt = (
-            "Eres un experto en transcripción matemática y científica. "
-            "Tu tarea es extraer TODO el contenido de esta imagen. "
-            "Usa LaTeX ($...$ para inline, $$...$$ para bloques) para TODAS las fórmulas. "
-            "Mantené el texto explicativo y el orden del documento. "
-            "Responde solo con la transcripción en Markdown."
-        )
-
-        # M4 Pro puede manejar más, pero Ollama a veces se satura. 
-        # Aumentamos timeout a 300s (5 min) para páginas muy complejas.
-        r = requests.post(
-            f"{OLLAMA_URL}/api/generate",
-            json={
-                "model":  vision_model,
-                "prompt": prompt,
-                "images": [img_b64],
-                "stream": False,
-                "options": {
-                    "temperature": 0.0, 
-                    "num_ctx": 4096,
-                    "num_thread": 8  # Aprovechar núcleos M4
-                },
-            },
-            timeout=300,
-        )
-        text = r.json().get("response", "").strip()
-
-        # Detectar si el modelo rechazó la request (filtro activado)
-        refusal_hints = [
-            "no puedo ayudar", "cannot help", "i can't", "no me es posible",
-            "lo siento, pero no", "sorry, i", "i'm unable", 
-            "desculpe", "não posso", "não consigo"
-        ]
-        if any(h in text.lower() for h in refusal_hints):
-            # Reintentar con prompt aún más neutro
-            prompt2 = (
-                "Analizá esta imagen matemática de un apunte universitario. "
-                "Listá todas las expresiones matemáticas que ves usando LaTeX ($...$). "
-                "Incluí el texto que acompaña a cada expresión."
+            prompt = (
+                "Eres un experto en transcripción matemática y científica. "
+                "Tu tarea es extraer TODO el contenido de esta imagen. "
+                "Usa LaTeX ($...$ para inline, $$...$$ para bloques) para TODAS las fórmulas. "
+                "Mantené el texto explicativo y el orden del documento. "
+                "Responde solo con la transcripción en Markdown."
             )
-            r2 = requests.post(
+
+            # M4 Pro puede manejar más, pero Ollama a veces se satura. 
+            # Aumentamos timeout a 300s (5 min) para páginas muy complejas.
+            r = requests.post(
                 f"{OLLAMA_URL}/api/generate",
                 json={
                     "model":  vision_model,
-                    "prompt": prompt2,
+                    "prompt": prompt,
                     "images": [img_b64],
                     "stream": False,
-                    "options": {"temperature": 0.0, "num_ctx": 4096},
+                    "options": {
+                        "temperature": 0.0, 
+                        "num_ctx": 4096,
+                        "num_thread": 8  # Aprovechar núcleos M4
+                    },
                 },
                 timeout=300,
             )
-            text = r2.json().get("response", "").strip()
+            text = r.json().get("response", "").strip()
 
-        if text and not any(h in text.lower() for h in refusal_hints):
-            return f"<!-- página {page_num} — OCR visual -->\n{text}"
+            # Detectar si el modelo rechazó la request (filtro activado)
+            refusal_hints = [
+                "no puedo ayudar", "cannot help", "i can't", "no me es posible",
+                "lo siento, pero no", "sorry, i", "i'm unable", 
+                "desculpe", "não posso", "não consigo"
+            ]
+            if any(h in text.lower() for h in refusal_hints):
+                # Reintentar con prompt aún más neutro
+                prompt2 = (
+                    "Analizá esta imagen matemática de un apunte universitario. "
+                    "Listá todas las expresiones matemáticas que ves usando LaTeX ($...$). "
+                    "Incluí el texto que acompaña a cada expresión."
+                )
+                r2 = requests.post(
+                    f"{OLLAMA_URL}/api/generate",
+                    json={
+                        "model":  vision_model,
+                        "prompt": prompt2,
+                        "images": [img_b64],
+                        "stream": False,
+                        "options": {"temperature": 0.0, "num_ctx": 4096},
+                    },
+                    timeout=300,
+                )
+                text = r2.json().get("response", "").strip()
 
-    except Exception as e:
-        from core.logger import log
-        log(f"Error OCR visión página {page_num}: {e}", "warn")
+            if text and not any(h in text.lower() for h in refusal_hints):
+                return f"<!-- página {page_num} — OCR visual -->\n{text}"
+
+        except Exception as e:
+            from core.logger import log
+            log(f"Error OCR visión página {page_num}: {e}", "warn")
     return ""
 
 
@@ -188,11 +191,12 @@ def analyze_content(text: str, existing_topics: list = None, model: str = None) 
     prompt = f"""Eres un Agente de Inteligencia Académica de Grado Superior especializado en Clasificación y Arquitectura de Conocimiento.
     
 TAREA: Realizar un relevamiento exhaustivo del documento y extraer metadatos de alta fidelidad.
-
+ 
 REGLAS DE CLASIFICACIÓN (INGENIERÍA DE CONTEXTO):
 1. MATERIA Y CATEGORÍA: Sé extremadamente preciso. No confundas temas transversales. Si el documento tiene fórmulas, es Matemáticas o Física. Si tiene código, es Programación. Si es un texto narrativo, es Literatura.
 2. CONTEXTO DE VAULT: Si el usuario menciona temas previos como {existing_str}, tratá de mantener la coherencia taxonómica.
 3. INFERENCIA LÓGICA: Si el documento es una 'guía de ejercicios', inferí el tema teórico subyacente (ej: "Cálculo Diferencial").
+4. TEXTOS FUNDACIONALES (LA BIBLIA): Si el texto contiene reglas fundamentales, metodología transversal, o es un texto base indiscutible (ej: "leer, pensar y escribir en la universidad"), DEBES agregar obligatoriamente la etiqueta "#biblia" en la lista de tags.
 
 CONTENIDO:
 \"\"\"
@@ -215,23 +219,24 @@ FORMATO DE SALIDA (JSON ESTRICTO):
   "conexiones_sugeridas": ["Temas del vault relacionados"]
 }}"""
 
-    try:
-        r = requests.post(
-            f"{OLLAMA_URL}/api/generate",
-            json={
-                "model":   m,
-                "prompt":  prompt,
-                "stream":  False,
-                "format":  "json",
-                "options": {
-                    "temperature": 0.0, 
-                    "num_ctx": 8192,
-                    "num_thread": 8
+    with gpu_lock("Ollama Analysis"):
+        try:
+            r = requests.post(
+                f"{OLLAMA_URL}/api/generate",
+                json={
+                    "model":   m,
+                    "prompt":  prompt,
+                    "stream":  False,
+                    "format":  "json",
+                    "options": {
+                        "temperature": 0.0, 
+                        "num_ctx": 16384,
+                        "num_thread": 8
+                    },
                 },
-            },
-            timeout=180,
-        )
-        raw = r.json().get("response", "{}").strip()
+                timeout=180,
+            )
+            raw = r.json().get("response", "{}").strip()
         raw = re.sub(r"```json\s*", "", raw)
         raw = re.sub(r"```\s*",     "", raw)
         match = re.search(r"\{.*\}", raw, re.DOTALL)
@@ -305,11 +310,13 @@ Estás diseñado para asistir al usuario con rigor científico, profundidad anal
    - Si la información en el vault es contradictoria, resáltalo.
 2. **CITACIÓN OBLIGATORIA**: Cada vez que afirmes algo basado en el vault, DEBES citar la fuente usando [ID] (ej: [Fuente 1], [Fuente 2]).
 3. **RAZONAMIENTO PASO A PASO (CoT)**: Antes de dar tu respuesta final, analiza internamente la relación entre los fragmentos recuperados para construir una síntesis coherente.
-4. **ESTILO ACADÉMICO**:
+4. **ESTILO ACADÉMICO Y VÍNCULOS**:
    - Sé detallado y exhaustivo. Evita respuestas vagas o cortas.
+   - **VÍNCULOS [[WIKILINK]]**: Es obligatorio intentar vincular conceptos con notas existentes del vault. Usá `list_vault_notes` para saber qué enlazar.
    - Usa Markdown (negritas, listas, tablas) para estructurar la información.
    - Usa LaTeX ($...$) para fórmulas o términos matemáticos.
-5. **HERRAMIENTAS**: 
+5. **HERRAMIENTAS OPERATIVAS**: 
+   - **EDICIÓN**: Si ya creaste una nota y necesitás mejorarla, usá `edit_vault_note`.
    - Usa 'search_internet' solo si el vault no tiene la respuesta o si necesitas actualidad.
    - No menciones el uso de herramientas en el texto final; úsalas de forma integrada.
 
@@ -392,11 +399,14 @@ Estás diseñado para asistir al usuario con rigor científico, profundidad anal
                 if active_tools and sys_msg_idx != -1:
                     tools_str = json.dumps([t["function"] for t in active_tools], indent=2, ensure_ascii=False)
                     tool_prompt = (
-                        f"\n\nTIENES ACCESO A LAS SIGUIENTES HERRAMIENTAS:\n{tools_str}\n"
-                        "Si necesitas usar una herramienta, DEBES responder ÚNICAMENTE con un bloque JSON "
-                        "con este formato estricto:\n"
-                        "{\"name\": \"nombre_herramienta\", \"parameters\": {\"param1\": \"valor\"}}\n"
-                        "NO ESCRIBAS NADA MÁS ALREDEDOR DEL JSON."
+                        f"\n\n### PROTOCOLO DE ACCIÓN (MANDATORIO):\n"
+                        f"Si el usuario pide realizar una acción (crear, buscar, leer, ejecutar), DEBES responder ÚNICAMENTE con el bloque JSON de la herramienta.\n"
+                        f"PROHIBIDO: No saludes, no expliques, no resumas en el chat si vas a usar una herramienta.\n\n"
+                        f"HERRAMIENTAS:\n{tools_str}\n\n"
+                        "FORMATO DE RESPUESTA:\n"
+                        "```json\n"
+                        "{\"name\": \"nombre\", \"parameters\": {...}}\n"
+                        "```"
                     )
                     messages[sys_msg_idx]["content"] = original_sys_content + tool_prompt
 
@@ -422,7 +432,14 @@ Estás diseñado para asistir al usuario con rigor científico, profundidad anal
                     if not is_json_tool:
                         # Yield al frontend (limpieza quirúrgica si es el inicio)
                         if len(response_text) == len(chunk_text): # Primer chunk
-                            chunk_text = re.sub(r'^(Respuesta|Jarvis|Assistant):\s*', '', chunk_text, flags=re.I)
+                            chunk_text = re.sub(r'^(Respuesta|Jarvis|Assistant|JARVIS):\s*', '', chunk_text, flags=re.I)
+                        
+                        # Si detectamos que empezó un JSON a mitad de camino, dejamos de streamear
+                        clean_chunk = chunk_text.strip()
+                        if clean_chunk.startswith("{") or ("\"name\"" in response_text and "{" in response_text):
+                            is_json_tool = True
+                            continue
+
                         if chunk_text.strip():
                             full_answer += chunk_text
                             yield json.dumps({"type": "chunk", "content": chunk_text}) + "\n"
@@ -488,18 +505,18 @@ Estás diseñado para asistir al usuario con rigor científico, profundidad anal
 
 
 def _try_parse_tool_from_text(text: str) -> dict:
-    """Fallback parser: detecta tool calls que Llama 3.1 filtró al texto.
-    
-    Busca un bloque JSON balanceado que contenga 'name' y 'parameters',
-    y lo convierte a la estructura estándar de tool_call de Ollama.
-    Retorna None si no encuentra nada válido.
-    """
+    """Detecta tool calls en texto, buscando bloques markdown o JSON directo."""
     try:
+        # 1. Buscar bloque markdown ```json ... ```
+        md_match = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
+        if md_match:
+            return _parse_json_block(md_match.group(1))
+            
+        # 2. Buscar primer { balanceado
         start = text.find('{')
         if start == -1:
             return None
         
-        # Encontrar el bloque balanceado
         count = 0
         end = -1
         for i in range(start, len(text)):
@@ -511,21 +528,24 @@ def _try_parse_tool_from_text(text: str) -> dict:
                 end = i + 1
                 break
         
-        if end == -1:
-            return None
-        
-        block = text[start:end]
+        if end != -1:
+            return _parse_json_block(text[start:end])
+            
+    except Exception:
+        pass
+    return None
+
+def _parse_json_block(block: str) -> dict:
+    try:
         parsed = json.loads(block)
-        
-        # Verificar que parece un tool call
         if "name" in parsed:
             return {
                 "function": {
                     "name": parsed["name"],
                     "arguments": parsed.get("parameters", parsed.get("arguments", {}))
                 },
-                "id": "fallback_tc_0"
+                "id": "tc_" + str(hash(block))[:8]
             }
-    except (json.JSONDecodeError, KeyError, TypeError):
+    except:
         pass
     return None

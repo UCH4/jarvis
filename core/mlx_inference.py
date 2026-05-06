@@ -1,5 +1,5 @@
-import json
 import logging
+from core.gpu import gpu_lock
 
 _model = None
 _tokenizer = None
@@ -46,17 +46,18 @@ def generate_chat_stream(messages, tools=None):
         else:
             messages.insert(0, {"role": "system", "content": tool_prompt})
 
-    try:
-        prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    except Exception as e:
-        # Fallback si el tokenizer no soporta chat templates
-        prompt = ""
-        for m in messages:
-            prompt += f"<|start_header_id|>{m['role']}<|end_header_id|>\n\n{m['content']}<|eot_id|>\n"
-        prompt += "<|start_header_id|>assistant<|end_header_id|>\n\n"
+    with gpu_lock("MLX Chat Stream"):
+        try:
+            prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        except Exception as e:
+            # Fallback si el tokenizer no soporta chat templates
+            prompt = ""
+            for m in messages:
+                prompt += f"<|start_header_id|>{m['role']}<|end_header_id|>\n\n{m['content']}<|eot_id|>\n"
+            prompt += "<|start_header_id|>assistant<|end_header_id|>\n\n"
 
-    for chunk in mlx_lm.stream_generate(model, tokenizer, prompt, max_tokens=2048):
-        yield chunk
+        for chunk in mlx_lm.stream_generate(model, tokenizer, prompt, max_tokens=2048):
+            yield chunk
 
 def generate_text(prompt, max_tokens=500, temperature=0.1):
     """
@@ -64,7 +65,13 @@ def generate_text(prompt, max_tokens=500, temperature=0.1):
     """
     import mlx_lm
     model, tokenizer = get_mlx_model()
-    # In newer versions of mlx_lm, temperature is passed via kwargs or sampler, 
-    # but removing it defaults to greedy which is fine for RAG/Reranker.
-    response = mlx_lm.generate(model, tokenizer, prompt, max_tokens=max_tokens)
-    return response.strip()
+    
+    with gpu_lock("MLX Text Gen"):
+        # Intentar con 'temp' primero, luego 'temperature', luego sin nada
+        try:
+            return mlx_lm.generate(model, tokenizer, prompt, max_tokens=max_tokens, temp=temperature).strip()
+        except TypeError:
+            try:
+                return mlx_lm.generate(model, tokenizer, prompt, max_tokens=max_tokens, temperature=temperature).strip()
+            except TypeError:
+                return mlx_lm.generate(model, tokenizer, prompt, max_tokens=max_tokens).strip()

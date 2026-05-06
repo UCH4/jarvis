@@ -458,6 +458,29 @@ function handleChatKey(e) {
   }
 }
 
+async function handleChatFileUpload(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  
+  try {
+    const text = await file.text();
+    const input = document.getElementById('chat-input');
+    const attachmentText = `\n\n### BORRADOR PARA REVISAR (${file.name}) ###\n\n${text}\n\n`;
+    
+    // Insertar el texto del archivo en el textarea
+    input.value = input.value + attachmentText;
+    autoResize(input);
+    
+    // Feedback visual
+    appendMsg('jarvis', `📎 Archivo **${file.name}** adjuntado al borrador de tu mensaje. Escribí tu pregunta y dale a Preguntar cuando estés listo.`);
+  } catch (error) {
+    appendMsg('jarvis', `❌ Error al leer el archivo: ${error.message}`);
+  }
+  
+  // Limpiar el input para permitir subir el mismo archivo de nuevo si se quiere
+  e.target.value = '';
+}
+
 function escapeHtml(text) {
   return text
     .replace(/&/g, '&amp;')

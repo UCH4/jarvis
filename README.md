@@ -1,96 +1,60 @@
-# 🧠 Jarvis Scanner — Academic Vault Architect
+# 🧠 Jarvis Academic Agent — Vault Architect & Knowledge Engine
 
-Sistema RAG local que transforma PDFs académicos en un grafo de conocimiento
-estructurado en Obsidian. 100% local, sin APIs externas, sin costos recurrentes.
+Sistema Agente Académico Local que transforma PDFs y apuntes en un Grafo de Conocimiento estructurado en Obsidian. Optimizado específicamente para hardware Apple Silicon (Mac M4 Pro).
 
-## Estructura del Proyecto
+## 🚀 Características Principales (Jarvis Final Stable)
+
+- **🔄 Ciclo de Agente Autónomo (ReAct):** Jarvis no solo busca, sino que actúa. Puede crear notas (`create_vault_note`), editar contenidos existentes (`edit_vault_note`) y navegar el vault (`list_vault_notes`) para generar vínculos automáticos `[[WikiLinks]]`.
+- **⚡ Inferencia MLX Nativa:** Motor de texto y reranking optimizado para Apple Silicon usando el framework MLX. Inferencia de baja latencia aprovechando la Memoria Unificada.
+- **🛡️ GPU Shield (Estabilidad):** Gestor de bloqueo de hardware que coordina MLX y Ollama. Previene crashes de Metal y saturación de hardware en tareas intensas.
+- **📚 Modo "La Biblia" (RAG+):** Priorización absoluta de textos fundacionales y metodológicos usando el tag `#biblia`.
+- **👁️ Visión OCR Dinámica:** Detección inteligente de fórmulas matemáticas y contenido gráfico usando `llama3.2-vision` solo cuando es necesario.
+- **🔍 RAG+ Avanzado:**
+  - **Multi-Query & HyDE:** Expansión de consultas para mayor precisión semántica.
+  - **Listwise Reranking:** Evaluación de relevancia por lotes en una sola pasada de inferencia.
+  - **Búsqueda Híbrida:** Fusión de BM25 (palabras clave) y Embeddings (semántica).
+
+## 📁 Estructura del Proyecto
 
 ```
 jarvis/
-├── jarvis_scanner.py       ← Entry point (corré esto)
-├── dashboard.html          ← UI del dashboard (sirve Flask)
-│
-├── core/                   ← Módulos de lógica
-│   ├── config.py           ← Variables de entorno y configuración
-│   ├── state.py            ← Estado global del scan (thread-safe)
-│   ├── logger.py           ← Sistema de logging
-│   ├── pdf.py              ← Extracción de PDFs + OCR visual
-│   ├── ollama.py           ← Integración Ollama: embeddings, análisis, visión, chat
-│   ├── rag.py              ← Búsqueda semántica en el vault
-│   ├── obsidian.py         ← Generación de notas Markdown
-│   ├── duplicates.py       ← Detección de documentos duplicados
-│   ├── scanner.py          ← Pipeline principal y escaneo en lote
-│   └── network.py          ← Red local y túnel Cloudflare
-│
-├── api/
-│   └── server.py           ← Servidor Flask (endpoints REST)
-│
-└── static/
-    ├── css/dashboard.css   ← Estilos del dashboard
-    └── js/dashboard.js     ← Lógica del dashboard
+├── agents/             ← Agentes especializados (Rerank, etc)
+├── api/                ← Endpoints REST para el Dashboard
+├── core/               ← Motor central
+│   ├── gpu.py          ← [NUEVO] Escudo de Hardware Metal
+│   ├── mlx_inference.py← [NUEVO] Motor MLX nativo
+│   ├── ollama.py       ← Integración con Ollama (Vision/Embeds)
+│   ├── tools.py        ← Herramientas del Agente (Crear/Editar/Vincular)
+│   └── scanner.py      ← Pipeline de procesamiento
+├── static/ & dashboard.html ← Interfaz de usuario
+└── jarvis_scanner.py   ← Punto de entrada principal
 ```
 
-## Instalación (Mac M4 Pro)
+## 🛠️ Requisitos e Instalación
 
-Para que Jarvis funcione al 100% en tu Mac M4 Pro con la arquitectura nativa (ARM), ejecutá este comando:
+Para Mac M4 Pro con arquitectura ARM:
 
 ```bash
-python3 -m pip install --break-system-packages flask flask-cors requests beautifulsoup4 chromadb pymupdf huey watchdog
+# Entorno y Dependencias
+python3 -m venv venv_pro
+source venv_pro/bin/activate
+pip install mlx-lm requests flask flask-cors chromadb pymupdf watchdog
 ```
 
-### 🧠 Cerebros Requeridos (Ollama)
+### 📡 Modelos Recomendados
+- **Razonamiento/Chat:** `llama3.1:8b` (Ollama) o `mlx-community/Meta-Llama-3.1-8B-Instruct-8bit`.
+- **Visión:** `llama3.2-vision:latest`.
+- **Embeddings:** `nomic-embed-text`.
 
-Necesitás tener estos modelos instalados en Ollama para que el sistema funcione:
-
-```bash
-ollama pull llama3.1          # Chat y razonamiento (8b)
-ollama pull llama3.2-vision   # OCR de fórmulas matemáticas
-ollama pull nomic-embed-text  # Embeddings del vault (RAG)
-```
-
-### 📡 Acceso Remoto (Opcional)
-
-Si vas a usar el flag `--tunnel` para acceder desde fuera de tu casa:
+## 📡 Uso
 
 ```bash
-brew install cloudflared
-```
-
-## Uso
-
-```bash
-# Servidor web + túnel remoto (acceso desde cualquier red)
-python3 jarvis_scanner.py --tunnel
-
-# Solo servidor web (red local)
-python3 jarvis_scanner.py
+# Modo Dashboard (Web + Chat)
+python jarvis_scanner.py
 
 # Scan directo desde terminal
-python3 jarvis_scanner.py --scan /ruta/pdfs --vault /ruta/vault
-
-# Modo CLI interactivo
-python3 jarvis_scanner.py --cli
+python jarvis_scanner.py --scan /ruta/pdfs --vault /ruta/vault
 ```
 
-## Stack Tecnológico
-
-| Componente       | Tecnología                             |
-|------------------|----------------------------------------|
-| Backend          | Python 3.12 + Flask                    |
-| IA Razonamiento  | Ollama (llama3.1)                      |
-| IA Visión (OCR)  | Ollama (llama3.2-vision)               |
-| Embeddings       | nomic-embed-text                       |
-| RAG Avanzado     | HyDE + Multi-Query + LLM Reranking     |
-| Base Vectorial   | ChromaDB                               |
-| Acceso remoto    | Cloudflare Tunnel                      |
-| Fórmulas en UI   | MathJax 3                              |
-
-## Variables de Entorno (opcional)
-
-```bash
-export JARVIS_MODEL="qwen2.5:14b"        # Modelo de análisis
-export JARVIS_EMBED="nomic-embed-text"   # Modelo de embeddings
-export JARVIS_PORT="5001"                # Puerto del servidor
-export JARVIS_DUP_THRESHOLD="0.92"       # Umbral de duplicados
-export OLLAMA_URL="http://localhost:11434"
-```
+## 📜 Licencia
+Uso académico y personal. Desarrollado por Jarvis AI Team.

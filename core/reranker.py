@@ -21,37 +21,27 @@ def rerank(query: str, candidates: List[Dict], model: str = None, top_k: int = 3
     """
     if not candidates:
         return []
-    model = model or ANALYSIS_MODEL
-    scored = []
-    for cand in candidates:
-        snippet = cand.get("snippet", "")
-        title = cand.get("title", "")
-        path = cand.get("path", "")
-        prompt = (
-            f"### SISTEMA: Sos un Evaluador de Relevancia Crítico.\n"
-            f"### CONSULTA DEL USUARIO: {query}\n"
-            f"### DOCUMENTO: {title} ({path})\n"
-            f"### FRAGMENTO: {snippet}\n\n"
-            "INSTRUCCIÓN: Evalúa si este fragmento contiene información específica, hechos o datos para responder a la consulta."
-            "\n0: Irrelevante / Ruido / Sin datos."
-            "\n5: Relacionado pero vago o incompleto."
-            "\n10: Contiene la respuesta exacta o datos clave."
-            "\nResponde SOLO con el número (0-10)."
-        )
-        try:
-            from core.mlx_inference import generate_text
-            resp = generate_text(prompt, max_tokens=5, temperature=0.0)
-            # Extract first integer found
-            match = re.search(r"(\d+)", resp)
-            score = int(match.group(1)) if match else 0
-        except Exception:
-            score = 0
-        cand_copy = cand.copy()
-        cand_copy["rerank_score"] = score
-        scored.append(cand_copy)
-    # Sort by rerank_score descending
-    scored.sort(key=lambda x: x["rerank_score"], reverse=True)
-    # Return top_k without the auxiliary field
-    for c in scored[:top_k]:
-        c.pop("rerank_score", None)
-    return scored[:top_k]
+    
+    from agents.rerank_agent import RerankAgent
+    agent = RerankAgent()
+    
+    try:
+        # Una sola pasada de inferencia para todos los candidatos
+        scores = agent.rank_candidates(query, candidates)
+        
+        # Asignar los scores y ordenar
+        for i, cand in enumerate(candidates):
+            cand["rerank_score"] = scores[i] if i < len(scores) else 0
+            
+        candidates.sort(key=lambda x: x["rerank_score"], reverse=True)
+        
+        # Limpiar y devolver top_k
+        for c in candidates[:top_k]:
+            c.pop("rerank_score", None)
+            
+        return candidates[:top_k]
+        
+    except Exception as e:
+        from core.logger import log
+        log(f"Fallo en reranking listwise, devolviendo top_k original: {e}", "warn")
+        return candidates[:top_k]

@@ -66,6 +66,33 @@ def search_internet(query: str) -> str:
     except Exception as e:
         return f"Error en búsqueda web (Mac Network): {e}"
 
+def read_url_content(url: str) -> str:
+    """Descarga y extrae el texto principal de una URL específica."""
+    try:
+        import requests
+        from bs4 import BeautifulSoup
+        
+        headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15"}
+        res = requests.get(url, headers=headers, timeout=15)
+        res.raise_for_status()
+        
+        soup = BeautifulSoup(res.text, "html.parser")
+        
+        # Eliminar scripts, estilos, headers, footers
+        for script in soup(["script", "style", "header", "footer", "nav", "aside"]):
+            script.decompose()
+            
+        text = soup.get_text(separator='\n')
+        # Limpiar espacios
+        lines = (line.strip() for line in text.splitlines())
+        chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+        text = '\n'.join(chunk for chunk in chunks if chunk)
+        
+        # Truncar para no saturar contexto
+        return text[:15000] 
+    except Exception as e:
+        return f"Error al intentar leer la URL {url}: {e}"
+
 def read_obsidian_note(note_name: str) -> str:
     """Busca una nota en el vault por su nombre (parcial o total) y devuelve su contenido."""
     from core.config import load_config
@@ -99,6 +126,113 @@ def create_exercise(topic: str, content: str) -> str:
         return f"Éxito: Archivo '{filename}' creado en el Vault. Dile al usuario que lo revise en Obsidian."
     except Exception as e:
         return f"Error al crear el archivo: {e}"
+
+def create_vault_note(title: str, content: str, folder: str = "") -> str:
+    """Crea una nota Markdown en una carpeta específica del Vault."""
+    from core.config import load_config
+    import os
+    cfg = load_config()
+    vault = cfg.get("vault_path")
+    if not vault: return "Error: Vault no configurado."
+    
+    # Limpiar el título para que sea un nombre de archivo válido
+    safe_title = "".join([c if c.isalnum() or c in " -_" else "_" for c in title])
+    if not safe_title.endswith(".md"):
+        safe_title += ".md"
+        
+    target_dir = os.path.join(vault, folder) if folder else vault
+    
+    try:
+        os.makedirs(target_dir, exist_ok=True)
+        filepath = os.path.join(target_dir, safe_title)
+        
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(content)
+        
+        # --- NUEVO: Indexar en ChromaDB inmediatamente ---
+        try:
+            from core.db import get_collection
+            from core.chunker import markdown_aware_chunks
+            collection = get_collection()
+            chunks = markdown_aware_chunks(content, title=title)
+            if chunks:
+                ids = [f"{safe_title}_{i}" for i in range(len(chunks))]
+                metadatas = [{"title": title, "path": os.path.join(folder, safe_title) if folder else safe_title, "source": "Jarvis Tool"} for _ in chunks]
+                collection.add(documents=[c["content"] for c in chunks], metadatas=metadatas, ids=ids)
+        except Exception as ex:
+            print(f"Aviso: Nota creada pero no indexada: {ex}")
+            
+        return f"Éxito: Nota '{safe_title}' creada en el Vault (carpeta: {folder or 'raíz'}). Ahora podés leerla o pedirle al usuario que la abra."
+    except Exception as e:
+        return f"Error al crear la nota: {e}"
+
+def edit_vault_note(title: str, content: str, mode: str = "replace", folder: str = "") -> str:
+    """Modifica una nota existente (reemplaza o añade al final)."""
+    from core.config import load_config
+    import os
+    cfg = load_config()
+    vault = cfg.get("vault_path")
+    if not vault: return "Error: Vault no configurado."
+    
+    safe_title = "".join([c if c.isalnum() or c in " -_" else "_" for c in title])
+    if not safe_title.endswith(".md"):
+        safe_title += ".md"
+        
+    target_dir = os.path.join(vault, folder) if folder else vault
+    filepath = os.path.join(target_dir, safe_title)
+    
+    if not os.path.exists(filepath):
+        return f"Error: La nota '{title}' no existe. Usá 'create_vault_note' primero."
+        
+    try:
+        if mode == "append":
+            with open(filepath, "a", encoding="utf-8") as f:
+                f.write("\n\n" + content)
+            msg = f"Éxito: Contenido añadido al final de '{safe_title}'."
+        else:
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write(content)
+            msg = f"Éxito: Nota '{safe_title}' actualizada (reemplazo total)."
+
+        # --- NUEVO: Actualizar índice en ChromaDB ---
+        try:
+            from core.db import get_collection
+            from core.chunker import markdown_aware_chunks
+            collection = get_collection()
+            # Leer contenido completo para re-indexar
+            with open(filepath, "r", encoding="utf-8") as f:
+                full_content = f.read()
+            chunks = markdown_aware_chunks(full_content, title=title)
+            if chunks:
+                ids = [f"{safe_title}_{i}" for i in range(len(chunks))]
+                metadatas = [{"title": title, "path": os.path.join(folder, safe_title) if folder else safe_title, "source": "Jarvis Tool"} for _ in chunks]
+                # Upsert (add replaces if IDs match)
+                collection.add(documents=[c["content"] for c in chunks], metadatas=metadatas, ids=ids)
+        except Exception as ex:
+            print(f"Aviso: Nota editada pero no re-indexada: {ex}")
+
+        return msg
+    except Exception as e:
+        return f"Error al editar la nota: {e}"
+
+def list_vault_notes() -> str:
+    """Lista los títulos de las notas disponibles en el vault para poder crear enlaces [[link]]."""
+    from core.config import load_config
+    import os
+    cfg = load_config()
+    vault = cfg.get("vault_path")
+    if not vault: return "Error: Vault no configurado."
+    
+    notes = []
+    for root, dirs, files in os.walk(vault):
+        for f in files:
+            if f.endswith(".md"):
+                notes.append(f.replace(".md", ""))
+    
+    if not notes:
+        return "El vault está vacío o no se encontraron notas."
+        
+    return "Notas disponibles para enlazar:\n- " + "\n- ".join(notes[:50]) + (f"\n... y {len(notes)-50} más." if len(notes) > 50 else "")
 
 # Esquema de herramientas para Ollama/MLX
 
@@ -157,6 +291,23 @@ OLLAMA_TOOLS_SCHEMA = [
     {
         "type": "function",
         "function": {
+            "name": "read_url_content",
+            "description": "Descarga y lee el texto completo de una página web específica si el usuario te proporciona un link (URL).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "La URL exacta a leer (ej: 'https://es.wikipedia.org/wiki/Literatura')"
+                    }
+                },
+                "required": ["url"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "read_obsidian_note",
             "description": "Lee el contenido completo de una nota específica de Obsidian si necesitas más contexto sobre ella.",
             "parameters": {
@@ -191,6 +342,72 @@ OLLAMA_TOOLS_SCHEMA = [
                 "required": ["topic", "content"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_vault_note",
+            "description": "Crea una nueva nota de Obsidian (.md) con el contenido y título que especifiques. Usalo para organizar entregas, resúmenes o consignas.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {
+                        "type": "string",
+                        "description": "Título de la nota (ej: 'Resumen Química', 'Entrega Preforo 2')"
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "El contenido completo de la nota en formato Markdown."
+                    },
+                    "folder": {
+                        "type": "string",
+                        "description": "Carpeta opcional dentro del vault (ej: 'Entregas', 'Lenguaje/TPs')"
+                    }
+                },
+                "required": ["title", "content"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "edit_vault_note",
+            "description": "Modifica el contenido de una nota que ya existe. Úsalo para corregir, ampliar o refinar textos creados anteriormente.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {
+                        "type": "string",
+                        "description": "Título exacto de la nota a modificar."
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "El nuevo contenido o el fragmento a añadir."
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["replace", "append"],
+                        "description": "'replace' para sobrescribir todo, 'append' para añadir al final."
+                    },
+                    "folder": {
+                        "type": "string",
+                        "description": "Carpeta opcional donde se encuentra la nota."
+                    }
+                },
+                "required": ["title", "content"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_vault_notes",
+            "description": "Obtiene una lista de todos los títulos de notas en el vault. Úsalo para saber a qué notas puedes hacer referencia mediante [[vínculos]].",
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            }
+        }
     }
 ]
 
@@ -205,9 +422,17 @@ def execute_tool(tool_call) -> str:
         return read_local_file(args.get("path", ""))
     elif name == "search_internet":
         return search_internet(args.get("query", ""))
+    elif name == "read_url_content":
+        return read_url_content(args.get("url", ""))
     elif name == "read_obsidian_note":
         return read_obsidian_note(args.get("note_name", ""))
     elif name == "create_exercise":
         return create_exercise(args.get("topic", ""), args.get("content", ""))
+    elif name == "create_vault_note":
+        return create_vault_note(args.get("title", ""), args.get("content", ""), args.get("folder", ""))
+    elif name == "edit_vault_note":
+        return edit_vault_note(args.get("title", ""), args.get("content", ""), args.get("mode", "replace"), args.get("folder", ""))
+    elif name == "list_vault_notes":
+        return list_vault_notes()
     else:
         return f"Error: Herramienta '{name}' desconocida."
