@@ -117,4 +117,4 @@ if __name__ == "__main__":
         if cfg.get("scan_path") and cfg.get("vault_path"):
             start_auto_sync(cfg["scan_path"], cfg["vault_path"])
 
-        app.run(host="0.0.0.0", port=API_PORT, debug=False, use_reloader=False, threaded=False)
+        app.run(host="0.0.0.0", port=API_PORT, debug=False, use_reloader=False, threaded=True)

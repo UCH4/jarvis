@@ -147,6 +147,31 @@ def ocr_page_vision(page, vision_model: str, page_num: int) -> str:
     return ""
 
 
+def ocr_image_png_bytes(png_bytes: bytes, prompt: str, vision_model: str) -> str:
+    """OCR / transcripción de una imagen PNG en memoria vía Ollama."""
+    if not vision_model:
+        return ""
+    with gpu_lock("Ollama Vision Image"):
+        try:
+            img_b64 = base64.b64encode(png_bytes).decode()
+            r = requests.post(
+                f"{OLLAMA_URL}/api/generate",
+                json={
+                    "model": vision_model,
+                    "prompt": prompt,
+                    "images": [img_b64],
+                    "stream": False,
+                    "options": {"temperature": 0.0, "num_ctx": 4096},
+                },
+                timeout=300,
+            )
+            return (r.json().get("response") or "").strip()
+        except Exception as e:
+            from core.logger import log
+            log(f"Error OCR imagen bytes: {e}", "warn")
+    return ""
+
+
 # ─── Análisis de contenido ────────────────────────────────────
 
 # ─── AGENTE DE RAZONAMIENTO AVANZADO (RAG+) ────────────────────
@@ -237,20 +262,20 @@ FORMATO DE SALIDA (JSON ESTRICTO):
                 timeout=180,
             )
             raw = r.json().get("response", "{}").strip()
-        raw = re.sub(r"```json\s*", "", raw)
-        raw = re.sub(r"```\s*",     "", raw)
-        match = re.search(r"\{.*\}", raw, re.DOTALL)
-        if match:
-            json_str = match.group()
-            # Limpiar escapes inválidos (barras simples de LaTeX) antes de parsear
-            json_str = re.sub(r'\\(?![\\"/bfnrtu])', r'\\\\', json_str)
-            return json.loads(json_str)
-    except json.JSONDecodeError as e:
-        from core.logger import log
-        log(f"JSON inválido del modelo: {e}", "warn")
-    except Exception as e:
-        from core.logger import log
-        log(f"Error en análisis Ollama: {e}", "error")
+            raw = re.sub(r"```json\s*", "", raw)
+            raw = re.sub(r"```\s*",     "", raw)
+            match = re.search(r"\{.*\}", raw, re.DOTALL)
+            if match:
+                json_str = match.group()
+                # Limpiar escapes inválidos (barras simples de LaTeX) antes de parsear
+                json_str = re.sub(r'\\(?![\\"/bfnrtu])', r'\\\\', json_str)
+                return json.loads(json_str)
+        except json.JSONDecodeError as e:
+            from core.logger import log
+            log(f"JSON inválido del modelo: {e}", "warn")
+        except Exception as e:
+            from core.logger import log
+            log(f"Error en análisis Ollama: {e}", "error")
 
     return _fallback_analysis()
 
@@ -278,11 +303,22 @@ def chat_con_vault(question: str, vault_path: str, model: str = None, mode: str 
     from core.rag import buscar_en_vault
     from agents.professor import SOCRATIC_SYSTEM_PROMPT
     
-    m    = model or ANALYSIS_MODEL
+    from core.router import get_dynamic_model_config
+    from core.rag import buscar_en_vault
+    
+    # 0. Selección dinámica de cerebro
+    ai_cfg = get_dynamic_model_config(question, mode)
+    m = ai_cfg["model"]
+    provider = ai_cfg["provider"]
+    system_prompt_dynamic = ai_cfg["system_prompt"]
+    from core.logger import log
+    log(f"🧠 Cerebro Dinámico: Usando '{m}' ({provider}) para la intención detectada.", "info")
+
+    # 1. Recuperación de Contexto (RAG)
     docs = buscar_en_vault(question, vault_path, top_k=5)
 
     if not docs:
-        context_text = "(No se encontraron notas relevantes en el vault para esta pregunta. Usa internet si es necesario o responde con tu conocimiento base aclarando la falta de fuentes locales.)"
+        context_text = "(No se encontraron notas relevantes en el vault para esta pregunta. Usa internet si es necesario.)"
         sources      = []
     else:
         context_parts = [
@@ -290,19 +326,16 @@ def chat_con_vault(question: str, vault_path: str, model: str = None, mode: str 
             for i, d in enumerate(docs, 1)
         ]
         
-        # Inyectar Graph Mind
         from core.obsidian import get_local_graph_context
         note_names = [d["title"] for d in docs]
         graph_context = get_local_graph_context(vault_path, note_names)
-        
         if graph_context:
             context_parts.append(graph_context)
             
         context_text = "\n\n".join(context_parts)
         sources      = [{"title": d["title"], "path": d["path"], "score": d["score"]} for d in docs]
 
-    prompt_standard = """Sos JARVIS (Knowledge Architect), un sistema experto en análisis académico y gestión de conocimiento local.
-Estás diseñado para asistir al usuario con rigor científico, profundidad analítica y precisión quirúrgica.
+    prompt_standard = f"""{system_prompt_dynamic}
 
 ### REGLAS MAESTRAS DE RAZONAMIENTO:
 1. **ANCLAJE AL VAULT (PRIORIDAD ALFA)**: Tu conocimiento primario reside en el 'CONTEXTO DEL VAULT' proporcionado. 
@@ -311,7 +344,6 @@ Estás diseñado para asistir al usuario con rigor científico, profundidad anal
 2. **CITACIÓN OBLIGATORIA**: Cada vez que afirmes algo basado en el vault, DEBES citar la fuente usando [ID] (ej: [Fuente 1], [Fuente 2]).
 3. **RAZONAMIENTO PASO A PASO (CoT)**: Antes de dar tu respuesta final, analiza internamente la relación entre los fragmentos recuperados para construir una síntesis coherente.
 4. **ESTILO ACADÉMICO Y VÍNCULOS**:
-   - Sé detallado y exhaustivo. Evita respuestas vagas o cortas.
    - **VÍNCULOS [[WIKILINK]]**: Es obligatorio intentar vincular conceptos con notas existentes del vault. Usá `list_vault_notes` para saber qué enlazar.
    - Usa Markdown (negritas, listas, tablas) para estructurar la información.
    - Usa LaTeX ($...$) para fórmulas o términos matemáticos.
@@ -321,11 +353,12 @@ Estás diseñado para asistir al usuario con rigor científico, profundidad anal
    - No menciones el uso de herramientas en el texto final; úsalas de forma integrada.
 
 ### PROTOCOLO DE SALIDA:
-- Prohibido empezar con "Respuesta:", "De acuerdo al vault...", o frases similares. Ve directo al conocimiento.
+- Ve directo al conocimiento. Prohibido empezar con "Respuesta:", "Jarvis:", etc.
 - Prohibido el uso de JSON en el chat humano.
 - Idioma: Español (neutro/académico)."""
 
     if mode == "professor":
+        from agents.professor import SOCRATIC_SYSTEM_PROMPT
         prompt_system = SOCRATIC_SYSTEM_PROMPT
     else:
         prompt_system = prompt_standard
@@ -336,15 +369,13 @@ Estás diseñado para asistir al usuario con rigor científico, profundidad anal
     save_chat_message("user", question, mode, vault_path)
     
     # 2. Recuperar historial reciente
-    history = get_recent_chat_history(limit=6) # 3 vueltas de conversación
+    history = get_recent_chat_history(limit=6) 
     
     messages = [
         {"role": "system", "content": prompt_system},
     ]
     
-    # Agregar historial (evitando duplicar la pregunta actual si ya se guardó)
     for msg in history:
-        # No agregamos el último mensaje si es igual a la pregunta actual (evitar duplicado)
         if msg["role"] == "user" and msg["content"] == question:
             continue
         messages.append(msg)
@@ -356,93 +387,100 @@ Estás diseñado para asistir al usuario con rigor científico, profundidad anal
         from core.tools import OLLAMA_TOOLS_SCHEMA, execute_tool
         from core.state import load_state
         
-        # Cargar configuración para ver qué herramientas están activas
         state = load_state()
         config = state.get("config", {})
         
-        # Smart Selection: Si el modelo es DeepSeek-R1, desactivar herramientas (no las soporta nativamente)
-        model_name_lower = m.lower()
+        # Desactivar herramientas si el modelo no las soporta bien (DeepSeek o Vision)
         supports_tools = True
-        if "deepseek-r1" in model_name_lower or "vision" in model_name_lower:
+        if "deepseek" in m.lower() or "vision" in m.lower():
             supports_tools = False
-            from core.logger import log
-            log(f"Modo 'Razonamiento/Visión' detectado ({m}): Desactivando herramientas de Ollama para evitar errores.", "info")
+            log(f"Modo especializado detectado: Desactivando herramientas para '{m}' para asegurar estabilidad.", "info")
 
-        # Filtrar herramientas según config
+        # Filtrar herramientas activas
         active_tools = []
         if supports_tools:
             for t in OLLAMA_TOOLS_SCHEMA:
                 func_name = t.get("function", {}).get("name")
-                if func_name == "search_internet" and not config.get("tools_search", True):
-                    continue
-                if func_name == "execute_mac_command" and not config.get("tools_command", False):
-                    continue
-                if func_name == "read_local_file" and not config.get("tools_files", True):
-                    continue
+                if func_name == "search_internet" and not config.get("tools_search", True): continue
+                if func_name == "execute_mac_command" and not config.get("tools_command", False): continue
+                if func_name == "read_local_file" and not config.get("tools_files", True): continue
                 active_tools.append(t)
 
-        # Enviar primero las fuentes
         yield json.dumps({"type": "sources", "sources": sources}) + "\n"
 
         full_answer = ""
         max_tool_iterations = 3
         for iteration in range(max_tool_iterations):
             try:
-                from core.mlx_inference import get_mlx_model
-                import mlx_lm
-                model, tokenizer = get_mlx_model()
-                
-                # Inyectar tools al system prompt si hay
-                sys_msg_idx = next((i for i, m in enumerate(messages) if m["role"] == "system"), -1)
-                original_sys_content = messages[sys_msg_idx]["content"] if sys_msg_idx != -1 else ""
-                
-                if active_tools and sys_msg_idx != -1:
-                    tools_str = json.dumps([t["function"] for t in active_tools], indent=2, ensure_ascii=False)
-                    tool_prompt = (
-                        f"\n\n### PROTOCOLO DE ACCIÓN (MANDATORIO):\n"
-                        f"Si el usuario pide realizar una acción (crear, buscar, leer, ejecutar), DEBES responder ÚNICAMENTE con el bloque JSON de la herramienta.\n"
-                        f"PROHIBIDO: No saludes, no expliques, no resumas en el chat si vas a usar una herramienta.\n\n"
-                        f"HERRAMIENTAS:\n{tools_str}\n\n"
-                        "FORMATO DE RESPUESTA:\n"
-                        "```json\n"
-                        "{\"name\": \"nombre\", \"parameters\": {...}}\n"
-                        "```"
-                    )
-                    messages[sys_msg_idx]["content"] = original_sys_content + tool_prompt
-
-                prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-                
-                # Restaurar el system prompt original para no acumular el texto de las tools
-                if sys_msg_idx != -1:
-                    messages[sys_msg_idx]["content"] = original_sys_content
-
                 response_text = ""
                 is_json_tool = False
-                
-                # Stream nativo MLX
-                for chunk_obj in mlx_lm.stream_generate(model, tokenizer, prompt, max_tokens=2048):
-                    chunk_text = chunk_obj.text
-                    response_text += chunk_text
+
+                if provider == "mlx":
+                    # ── PROVEEDOR MLX (NATIVO M4) ──
+                    from core.mlx_inference import get_mlx_model
+                    import mlx_lm
+                    model_obj, tokenizer = get_mlx_model(m)
                     
-                    # Heurística para no streamear JSON de tools al usuario
-                    if len(response_text) < 10 and response_text.strip().startswith("{"):
-                        is_json_tool = True
-                        continue
+                    # Inyectar tools al prompt si hay
+                    if active_tools:
+                        tools_str = json.dumps([t["function"] for t in active_tools], indent=2, ensure_ascii=False)
+                        tool_prompt = (
+                            f"\n\n### PROTOCOLO DE HERRAMIENTAS:\n"
+                            f"Si necesitas usar una herramienta, responde SOLO con el JSON:\n"
+                            f"```json\n{{\"name\": \"nombre\", \"parameters\": {{...}}}}\n```\n\n"
+                            f"HERRAMIENTAS:\n{tools_str}"
+                        )
+                        # Agregamos temporalmente al system prompt
+                        messages[0]["content"] += tool_prompt
+
+                    prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+                    
+                    for chunk_obj in mlx_lm.stream_generate(model_obj, tokenizer, prompt, max_tokens=2048):
+                        chunk_text = chunk_obj.text
+                        response_text += chunk_text
                         
-                    if not is_json_tool:
-                        # Yield al frontend (limpieza quirúrgica si es el inicio)
-                        if len(response_text) == len(chunk_text): # Primer chunk
-                            chunk_text = re.sub(r'^(Respuesta|Jarvis|Assistant|JARVIS):\s*', '', chunk_text, flags=re.I)
-                        
-                        # Si detectamos que empezó un JSON a mitad de camino, dejamos de streamear
-                        clean_chunk = chunk_text.strip()
-                        if clean_chunk.startswith("{") or ("\"name\"" in response_text and "{" in response_text):
+                        if len(response_text) < 10 and response_text.strip().startswith("{"):
                             is_json_tool = True
                             continue
+                            
+                        if not is_json_tool:
+                            if len(response_text) == len(chunk_text):
+                                chunk_text = re.sub(r'^(Respuesta|Jarvis|Assistant|JARVIS):\s*', '', chunk_text, flags=re.I)
+                            
+                            clean_chunk = chunk_text.strip()
+                            if clean_chunk.startswith("{") or ("\"name\"" in response_text and "{" in response_text):
+                                is_json_tool = True
+                                continue
 
-                        if chunk_text.strip():
-                            full_answer += chunk_text
-                            yield json.dumps({"type": "chunk", "content": chunk_text}) + "\n"
+                            if chunk_text:
+                                full_answer += chunk_text
+                                yield json.dumps({"type": "chunk", "content": chunk_text}) + "\n"
+                else:
+                    # ── PROVEEDOR OLLAMA (Dinamismo) ──
+                    payload = {
+                        "model": m,
+                        "messages": messages,
+                        "stream": True,
+                        "options": {"temperature": ai_cfg.get("temperature", 0.7), "num_ctx": 8192}
+                    }
+                    if active_tools:
+                        payload["tools"] = active_tools
+
+                    r = requests.post(f"{OLLAMA_URL}/api/chat", json=payload, stream=True, timeout=120)
+                    for line in r.iter_lines():
+                        if line:
+                            chunk = json.loads(line)
+                            if "message" in chunk:
+                                content = chunk["message"].get("content", "")
+                                response_text += content
+                                if content:
+                                    full_answer += content
+                                    yield json.dumps({"type": "chunk", "content": content}) + "\n"
+                            if "tool_calls" in chunk:
+                                # Ollama maneja tool_calls estructurados
+                                is_json_tool = True
+                                response_text = json.dumps(chunk["message"].get("tool_calls", []))
+                                break
 
                 message = {"role": "assistant", "content": response_text.strip()}
                 messages.append(message)

@@ -7,6 +7,15 @@ _bm25_index = None
 _bm25_corpus = []
 _bm25_metadatas = []
 
+
+def invalidate_bm25_index():
+    """Fuerza reconstrucción del índice BM25 tras cambios en Chroma."""
+    global _bm25_index, _bm25_corpus, _bm25_metadatas
+    _bm25_index = None
+    _bm25_corpus = []
+    _bm25_metadatas = []
+
+
 def build_bm25_index(force=False):
     global _bm25_index, _bm25_corpus, _bm25_metadatas
     
@@ -60,12 +69,17 @@ def get_bm25_top_k(query: str, top_k: int = 15):
         
     return results
 
-def reciprocal_rank_fusion(semantic_results, bm25_results, k=60):
+def reciprocal_rank_fusion(semantic_results, bm25_results, k=60, alpha=0.5):
     """
-    Combina resultados semánticos (Chroma) y léxicos (BM25) usando RRF.
+    Combina resultados semánticos (Chroma) y léxicos (BM25) usando RRF con pesos.
+    alpha: peso para resultados semánticos (0.0 a 1.0). 1-alpha es para BM25.
     """
     rrf_scores = {}
     combined_docs = {}
+    
+    # Peso para cada canal
+    w_semantic = alpha
+    w_bm25 = 1.0 - alpha
     
     # Procesar resultados semánticos
     for rank, res in enumerate(semantic_results):
@@ -73,7 +87,7 @@ def reciprocal_rank_fusion(semantic_results, bm25_results, k=60):
         if snippet not in rrf_scores:
             rrf_scores[snippet] = 0
             combined_docs[snippet] = res
-        rrf_scores[snippet] += 1.0 / (k + rank + 1)
+        rrf_scores[snippet] += w_semantic * (1.0 / (k + rank + 1))
         
     # Procesar resultados BM25
     for rank, res in enumerate(bm25_results):
@@ -85,9 +99,9 @@ def reciprocal_rank_fusion(semantic_results, bm25_results, k=60):
                 "path": res["metadata"].get("path", ""),
                 "title": res["metadata"].get("title", "Documento"),
                 "snippet": snippet,
-                "score": 0.5 # Default score for sorting later if needed
+                "score": 0.5
             }
-        rrf_scores[snippet] += 1.0 / (k + rank + 1)
+        rrf_scores[snippet] += w_bm25 * (1.0 / (k + rank + 1))
         
     # Ordenar por RRF score
     sorted_snippets = sorted(rrf_scores.keys(), key=lambda s: rrf_scores[s], reverse=True)

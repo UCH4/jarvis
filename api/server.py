@@ -247,7 +247,14 @@ try:
         context = "\n\n".join([d["snippet"] for d in docs])
         
         exercise = generate_exercise(topic, context)
-        return jsonify(exercise)
+        # Garantizar formato consistente para dashboard
+        payload = {
+            "enunciado": exercise.get("enunciado", ""),
+            "pista": exercise.get("pista", ""),
+            "solucion_oculta": exercise.get("solucion_oculta", ""),
+            "tipo": exercise.get("tipo", "Teórico"),
+        }
+        return jsonify(payload)
 
     @app.route("/api/flashcards", methods=["POST"])
     def api_flashcards():
@@ -278,6 +285,68 @@ try:
         return jsonify({"status": "success" if "✅" in output else "error", "output": output})
 
     # ─── Info de red ──────────────────────────────────────────
+    @app.route("/api/ingest/handwriting", methods=["POST"])
+    def api_ingest_handwriting():
+        """Sube foto de cuaderno: OpenCV preprocess + VLM (MLX u Ollama)."""
+        f = request.files.get("image")
+        if not f:
+            return jsonify({"error": "Campo 'image' requerido (multipart)"}), 400
+        raw = f.read()
+        png = None
+        try:
+            from core.handwriting_preprocess import preprocess_handwriting_image
+            png = preprocess_handwriting_image(raw)
+        except Exception:
+            # Fallback robusto para formatos como HEIC (si PIL puede abrirlo)
+            try:
+                from PIL import Image
+                import io
+                img = Image.open(io.BytesIO(raw)).convert("RGB")
+                buf = io.BytesIO()
+                img.save(buf, format="PNG")
+                png = buf.getvalue()
+            except Exception:
+                return jsonify({
+                    "error": "No pude leer la imagen. Probá convertir HEIC a JPG/PNG o instalá soporte HEIF (pillow-heif)."
+                }), 422
+        from core.config import VISION_BACKEND
+        htr = (
+            "Actúa como transcriptor experto. Transcribí exactamente el texto y las fórmulas "
+            "matemáticas de la imagen. Si hay ambigüedad en un símbolo, elegí la interpretación "
+            "más lógica en contexto matemático. Salida solo en Markdown y LaTeX ($...$ / $$...$$)."
+        )
+        text = ""
+        if VISION_BACKEND == "mlx":
+            from core.mlx_vlm import transcribe_image_png
+            text = transcribe_image_png(png, htr)
+        else:
+            from core.ollama import get_vision_model, ocr_image_png_bytes
+            vm = get_vision_model()
+            if vm:
+                text = ocr_image_png_bytes(png, htr, vm)
+        from core.markdown_guard import guard_or_wrap_raw
+        final = guard_or_wrap_raw(text or "", title="Manuscrito")
+        if not (text or "").strip():
+            return jsonify({
+                "error": "No se detectó texto en la imagen. Probá con mejor luz, enfoque o JPG/PNG.",
+                "backend": VISION_BACKEND
+            }), 422
+        return jsonify({"text": final, "backend": VISION_BACKEND})
+
+    @app.route("/api/ingest/nougat", methods=["POST"])
+    def api_ingest_nougat():
+        """Encola ingest Nougat para un PDF (salida markdown)."""
+        data = request.get_json() or {}
+        pdf_path = data.get("pdf_path", "").strip()
+        out_md = data.get("output_md_path", "").strip()
+        if not pdf_path or not out_md:
+            return jsonify({"error": "pdf_path y output_md_path requeridos"}), 400
+        if not Path(pdf_path).is_file():
+            return jsonify({"error": f"PDF no existe: {pdf_path}"}), 400
+        from core.worker import nougat_ingest_task
+        nougat_ingest_task(pdf_path, out_md)
+        return jsonify({"message": "Nougat encolado", "output_md_path": out_md})
+
     @app.route("/api/network-info")
     def api_network_info():
         return jsonify({

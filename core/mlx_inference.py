@@ -1,56 +1,47 @@
 import logging
 from core.gpu import gpu_lock
 
-_model = None
-_tokenizer = None
+# Diccionario para mantener los modelos cargados en memoria
+_loaded_models = {}
+_loaded_tokenizers = {}
 
-def get_mlx_model():
-    global _model, _tokenizer
-    if _model is None:
+def get_mlx_model(model_name: str = "mlx-community/Meta-Llama-3.1-8B-Instruct-4bit"):
+    global _loaded_models, _loaded_tokenizers
+    
+    if model_name not in _loaded_models:
         from core.logger import log
-        log("Cargando modelo MLX en Memoria Unificada (Llama-3.1-8B-Instruct-8bit)...", "info")
-        log("Si es la primera vez, se descargará el modelo (~8GB). Por favor, esperá...", "warn")
+        log(f"Cargando modelo MLX nativo: {model_name}...", "info")
+        log("Esto aprovechará la Memoria Unificada del M4 Pro. Por favor, esperá...", "warn")
         try:
             import mlx_lm
-            _model, _tokenizer = mlx_lm.load("mlx-community/Meta-Llama-3.1-8B-Instruct-8bit")
-            log("✅ Modelo MLX cargado exitosamente.", "info")
+            model, tokenizer = mlx_lm.load(model_name)
+            _loaded_models[model_name] = model
+            _loaded_tokenizers[model_name] = tokenizer
+            log(f"✅ Modelo {model_name} cargado exitosamente en MLX.", "ok")
         except Exception as e:
-            log(f"Error cargando MLX: {e}", "error")
+            log(f"Error cargando MLX ({model_name}): {e}", "error")
+            # Fallback al modelo base si falla uno específico
+            if model_name != "mlx-community/Meta-Llama-3.1-8B-Instruct-4bit":
+                return get_mlx_model("mlx-community/Meta-Llama-3.1-8B-Instruct-4bit")
             raise e
-    return _model, _tokenizer
+            
+    return _loaded_models[model_name], _loaded_tokenizers[model_name]
 
-def generate_chat_stream(messages, tools=None):
+def generate_chat_stream(messages, model_name: str = None):
     """
-    Genera una respuesta en stream usando MLX-LM y el chat_template del modelo.
+    Genera una respuesta en stream usando MLX-LM.
     """
     import mlx_lm
-    model, tokenizer = get_mlx_model()
+    import json
     
-    # Manejo de tools: Llama 3.1 soporta tools nativamente si se le inyecta el esquema adecuado,
-    # pero como es un modelo instruct básico en MLX, lo mejor es inyectar un System Prompt fuerte
-    # para que responda con JSON si necesita usar una tool.
+    # Si no se especifica, usamos el default (Llama 3.1 8B 4bit)
+    target_model = model_name or "mlx-community/Meta-Llama-3.1-8B-Instruct-4bit"
+    model, tokenizer = get_mlx_model(target_model)
     
-    # Si hay tools, las inyectamos en el system prompt
-    if tools:
-        sys_msg = next((m for m in messages if m["role"] == "system"), None)
-        tools_str = json.dumps([t["function"] for t in tools], indent=2, ensure_ascii=False)
-        tool_prompt = (
-            f"\n\nTIENES ACCESO A LAS SIGUIENTES HERRAMIENTAS:\n{tools_str}\n"
-            "Si necesitas usar una herramienta, DEBES responder ÚNICAMENTE con un bloque JSON "
-            "con este formato estricto:\n"
-            "{\"name\": \"nombre_herramienta\", \"parameters\": {\"param1\": \"valor\"}}\n"
-            "NO ESCRIBAS NADA MÁS."
-        )
-        if sys_msg:
-            sys_msg["content"] += tool_prompt
-        else:
-            messages.insert(0, {"role": "system", "content": tool_prompt})
-
-    with gpu_lock("MLX Chat Stream"):
+    with gpu_lock(f"MLX Stream ({target_model})"):
         try:
             prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        except Exception as e:
-            # Fallback si el tokenizer no soporta chat templates
+        except Exception:
             prompt = ""
             for m in messages:
                 prompt += f"<|start_header_id|>{m['role']}<|end_header_id|>\n\n{m['content']}<|eot_id|>\n"
@@ -59,19 +50,17 @@ def generate_chat_stream(messages, tools=None):
         for chunk in mlx_lm.stream_generate(model, tokenizer, prompt, max_tokens=2048):
             yield chunk
 
-def generate_text(prompt, max_tokens=500, temperature=0.1):
+def generate_text(prompt, model_name: str = None, max_tokens=500, temperature=0.1):
     """
-    Genera texto de una sola vez (ideal para reranker, hyde, etc).
+    Genera texto de una sola vez para tareas internas (rerank, hyde).
     """
     import mlx_lm
-    model, tokenizer = get_mlx_model()
+    target_model = model_name or "mlx-community/Meta-Llama-3.1-8B-Instruct-4bit"
+    model, tokenizer = get_mlx_model(target_model)
     
-    with gpu_lock("MLX Text Gen"):
-        # Intentar con 'temp' primero, luego 'temperature', luego sin nada
+    with gpu_lock(f"MLX Text ({target_model})"):
         try:
+            # mlx_lm usa 'temp' o 'temperature' según versión
             return mlx_lm.generate(model, tokenizer, prompt, max_tokens=max_tokens, temp=temperature).strip()
         except TypeError:
-            try:
-                return mlx_lm.generate(model, tokenizer, prompt, max_tokens=max_tokens, temperature=temperature).strip()
-            except TypeError:
-                return mlx_lm.generate(model, tokenizer, prompt, max_tokens=max_tokens).strip()
+            return mlx_lm.generate(model, tokenizer, prompt, max_tokens=max_tokens).strip()

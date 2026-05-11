@@ -4,9 +4,8 @@ core/db.py — Manejo de Base de Datos Vectorial (ChromaDB)
 import os
 from pathlib import Path
 import chromadb
-from chromadb.utils import embedding_functions
 
-from core.config import OLLAMA_URL, EMBEDDING_MODEL
+from core.config import OLLAMA_URL, EMBEDDING_MODEL, EMBEDDING_DIM, CHROMA_COLLECTION
 
 # ─── GLOBAL TIMEOUT PATCH ─────────────────────────────────────
 # ChromaDB por defecto tiene un timeout muy corto para Ollama.
@@ -36,17 +35,29 @@ class CustomOllamaEmbeddingFunction:
         texts = [input] if isinstance(input, str) else input
         embeddings = []
         import requests
+        from core.logger import log
+        
         for text in texts:
             try:
+                # Truncamiento quirúrgico para evitar "input length exceeds context length"
+                # nomic-embed-text y la mayoría soportan ~8k, pero Ollama por defecto usa menos
+                safe_text = text[:6000] 
+                
                 r = requests.post(
                     self.url,
-                    json={"model": self.model_name, "prompt": text},
+                    json={"model": self.model_name, "prompt": safe_text},
                     timeout=60
                 )
+                if r.status_code == 400:
+                    log(f"Embeddings: Error 400 (Posible exceso de contexto) con modelo {self.model_name}", "warn")
+                    embeddings.append([0.0] * EMBEDDING_DIM)
+                    continue
+                    
                 r.raise_for_status()
                 embeddings.append(r.json().get("embedding", []))
-            except Exception:
-                embeddings.append([0.0] * 768) # Fallback vector nulo
+            except Exception as e:
+                log(f"Embeddings: Fallo al obtener vector: {e}", "warn")
+                embeddings.append([0.0] * EMBEDDING_DIM)
         return embeddings
 
 def get_embedding_function():
@@ -55,7 +66,9 @@ def get_embedding_function():
         model_name=EMBEDDING_MODEL
     )
 
-def get_collection(name: str = "vault_notes"):
+def get_collection(name: str = None):
+    if name is None:
+        name = CHROMA_COLLECTION
     client = get_chroma_client()
     try:
         # Intentamos obtener la colección existente.

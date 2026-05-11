@@ -6,3 +6,8 @@ chromadb
 pymupdf
 huey
 watchdog
+sentence-transformers
+opencv-python-headless
+pillow
+pillow-heif
+# Opcional visión MLX: pip install mlx-vlm

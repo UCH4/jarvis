@@ -31,6 +31,12 @@ FORMATO JSON:
   "tipo": "Teórico | Práctico | Análisis"
 }}"""
 
+    if not (context or "").strip():
+        context = (
+            "No se recuperó contexto del vault en esta consulta. "
+            "Genera un ejercicio general, corto y útil sobre el tema pedido."
+        )
+
     try:
         r = requests.post(
             f"{OLLAMA_URL}/api/generate",
@@ -41,11 +47,26 @@ FORMATO JSON:
                 "format": "json",
                 "options": {"temperature": 0.7}
             },
-            timeout=60
+            timeout=120
         )
-        return json.loads(r.json().get("response", "{}"))
+        data = json.loads(r.json().get("response", "{}"))
+        if not isinstance(data, dict):
+            raise ValueError("Formato inválido de ejercicio")
+        # Normalización para evitar que el frontend falle por claves faltantes
+        return {
+            "enunciado": data.get("enunciado") or f"Explica los fundamentos de: {topic}",
+            "pista": data.get("pista") or "Separá el tema en 3 ideas clave y da un ejemplo práctico.",
+            "solucion_oculta": data.get("solucion_oculta") or "Respuesta modelo no disponible.",
+            "tipo": data.get("tipo") or "Teórico",
+        }
     except Exception:
-        return {"error": "No se pudo generar el ejercicio"}
+        # Fallback local robusto
+        return {
+            "enunciado": f"Desarrollá un mini-resumen de '{topic}' en 5 líneas e incluye 2 ejemplos.",
+            "pista": "Pensá en definición, utilidad y ejemplo real de laboratorio/clase.",
+            "solucion_oculta": "Una buena respuesta incluye definición formal, contexto de uso y ejemplos claros.",
+            "tipo": "Teórico",
+        }
 
 def generate_flashcards(context: str, count: int = 5) -> list:
     """Genera flashcards (tarjetas de estudio) basadas en el contexto."""

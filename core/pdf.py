@@ -24,6 +24,7 @@ _ACCENT_MAP = [
 ]
 
 from core.vision import has_high_math_density
+from core.config import VISION_BACKEND
 
 
 def limpiar_texto_pdf(text: str) -> str:
@@ -82,13 +83,26 @@ def extract_pdf_text(pdf_path: str, max_chars: int = 0) -> str:
         os.system("pip3.12 install PyMuPDF --break-system-packages -q")
         import fitz
 
-    # Detectar modelo de visión una sola vez
+    # Detectar modelo de visión una sola vez (Ollama; MLX no lo requiere)
     from core.ollama import get_vision_model, ocr_page_vision
     vision_model = get_vision_model()
     if vision_model:
         log(f"Modelo de visión disponible: {vision_model}", "info")
     else:
-        log("Sin modelo de visión. Para OCR de fórmulas: ollama pull llava:7b", "warn")
+        log("Sin modelo de visión Ollama. Para OCR: ollama pull llava o JARVIS_VISION_BACKEND=mlx", "warn")
+
+    def _ocr_math_page(page, page_idx: int) -> str:
+        if VISION_BACKEND == "mlx":
+            try:
+                from core.mlx_vlm import transcribe_pdf_page_fitz
+                out = transcribe_pdf_page_fitz(page, page_idx + 1)
+                if out:
+                    return out
+            except Exception as e:
+                log(f"MLX-VLM OCR falló, fallback Ollama: {e}", "warn")
+        if vision_model:
+            return ocr_page_vision(page, vision_model, page_idx + 1) or ""
+        return ""
 
     # ── Intento 0: Marker-PDF (Mejor calidad matemática) ──────
     marker_text = _run_marker_pdf(pdf_path)
@@ -102,8 +116,8 @@ def extract_pdf_text(pdf_path: str, max_chars: int = 0) -> str:
         pages  = []
         for i, page in enumerate(doc):
             raw = page.get_text("text").strip()
-            if vision_model and has_high_math_density(raw):
-                ocr = ocr_page_vision(page, vision_model, i + 1)
+            if (vision_model or VISION_BACKEND == "mlx") and has_high_math_density(raw):
+                ocr = _ocr_math_page(page, i)
                 if ocr:
                     pages.append(ocr)
                     continue
@@ -121,14 +135,13 @@ def extract_pdf_text(pdf_path: str, max_chars: int = 0) -> str:
 
     # ── Intento 2: PyMuPDF estándar ───────────────────────────
     try:
-        from core.ollama import get_vision_model, ocr_page_vision
         doc   = fitz.open(pdf_path)
         pages = []
         for i, page in enumerate(doc):
             raw   = page.get_text("text").strip()
             clean = limpiar_texto_pdf(raw) if raw else ""
-            if vision_model and has_high_math_density(clean):
-                ocr = ocr_page_vision(page, vision_model, i + 1)
+            if (vision_model or VISION_BACKEND == "mlx") and has_high_math_density(clean):
+                ocr = _ocr_math_page(page, i)
                 if ocr:
                     pages.append(ocr)
                     continue

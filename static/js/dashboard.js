@@ -236,6 +236,35 @@ function openFile(path) {
   // Aquí se podría integrar con Obsidian URI: obsidian://open?vault=...&file=...
 }
 
+// ─── MANUSCRITO (foto) ─────────────────────────────────────────────
+async function uploadHandwriting() {
+  const inp = document.getElementById('handwriting-file');
+  const out = document.getElementById('handwriting-output');
+  const st = document.getElementById('handwriting-status');
+  if (!inp || !inp.files || !inp.files[0]) {
+    if (st) st.textContent = 'Elegí una imagen primero.';
+    return;
+  }
+  const fd = new FormData();
+  fd.append('image', inp.files[0]);
+  if (st) st.textContent = 'Procesando…';
+  if (out) out.value = '';
+  try {
+    const r = await fetch(`${API}/ingest/handwriting`, { method: 'POST', body: fd });
+    const d = await r.json();
+    if (!r.ok) {
+      if (st) st.textContent = d.error || 'Error';
+      if (out) out.value = '';
+      return;
+    }
+    if (out) out.value = d.text || '';
+    if (st) st.textContent = 'Listo (' + (d.backend || '') + ')';
+  } catch (e) {
+    if (st) st.textContent = 'Fallo de red: ' + e;
+    if (out) out.value = '';
+  }
+}
+
 // ─── SCAN ─────────────────────────────────────────────
 async function startScan() {
   const scanPath = document.getElementById('scan-path').value.trim();

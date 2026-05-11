@@ -1,6 +1,7 @@
 """
 core/scanner.py — Pipeline de procesamiento de PDFs y escaneo en lote
 """
+import os
 from datetime import datetime
 from pathlib  import Path
 
@@ -100,8 +101,24 @@ def process_single_pdf(pdf_path: str, vault_path: str, registry: dict,
                          "source": p.name} for c in chunks]
             collection.add(documents=chunk_texts, metadatas=metadatas, ids=ids)
         log(f"Vectorizados {len(chunks)} fragmentos en ChromaDB", "info")
+        try:
+            from core.hybrid_search import invalidate_bm25_index
+            invalidate_bm25_index()
+        except Exception:
+            pass
     except Exception as e:
         log(f"Error indexando en Vector DB: {e}", "warn")
+
+    if os.getenv("JARVIS_AUTO_NOUGAT") == "1":
+        try:
+            from core.ingest_heavy import analysis_suggests_heavy_ingest
+            from core.worker import nougat_ingest_task
+            if analysis_suggests_heavy_ingest(analysis, full_text):
+                sidecar = note_path.with_name(note_path.stem + "_nougat.md")
+                nougat_ingest_task(str(pdf_path), str(sidecar))
+                log(f"Nougat encolado → {sidecar.name}", "info")
+        except Exception as e:
+            log(f"No se pudo encolar Nougat: {e}", "warn")
 
     return {
         "file":      p.name,

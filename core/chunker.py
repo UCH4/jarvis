@@ -49,10 +49,17 @@ def markdown_aware_chunks(text: str, title: str = "", chunk_size: int = 1600, ov
         pos = 0
         while pos < len(body):
             chunk_end = min(pos + chunk_size, len(body))
-            chunk_text = body[pos:chunk_end].strip()
-            if chunk_text:
+            raw_text = body[pos:chunk_end].strip()
+            if raw_text:
+                # Inyectar migas de pan contextuales (Contextual Breadcrumbs)
+                # Esto ayuda al modelo a saber de qué trata el fragmento incluso si es corto.
+                context_prefix = f"[DOCUMENTO: {title}"
+                if heading:
+                    context_prefix += f" | SECCIÓN: {heading}"
+                context_prefix += "]\n"
+                
                 chunks.append({
-                    "content": chunk_text,
+                    "content": context_prefix + raw_text,
                     "section": heading,
                     "title": title,
                 })

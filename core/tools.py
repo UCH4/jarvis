@@ -1,5 +1,59 @@
 import subprocess
 import os
+import urllib.parse
+
+import requests
+
+from core.config import OBSIDIAN_REST_URL, OBSIDIAN_API_KEY, OBSIDIAN_VERIFY_TLS
+
+def _invalidate_bm25_after_index():
+    try:
+        from core.hybrid_search import invalidate_bm25_index
+        invalidate_bm25_index()
+    except Exception:
+        pass
+
+
+def _obsidian_rest_headers():
+    h = {"Content-Type": "text/markdown; charset=utf-8"}
+    if OBSIDIAN_API_KEY:
+        h["Authorization"] = f"Bearer {OBSIDIAN_API_KEY}"
+    return h
+
+
+def obsidian_rest_put_note(rel_path: str, content: str, mode: str = "replace") -> tuple:
+    """
+    Escribe nota vía Obsidian Local REST API (PUT /vault/{path}).
+    Devuelve (ok: bool, message: str).
+    """
+    if not OBSIDIAN_REST_URL:
+        return False, ""
+    path_enc = "/".join(urllib.parse.quote(seg, safe="") for seg in rel_path.split("/"))
+    url = f"{OBSIDIAN_REST_URL}/vault/{path_enc}"
+    try:
+        if mode == "append":
+            get_url = f"{OBSIDIAN_REST_URL}/vault/{path_enc}"
+            gr = requests.get(
+                get_url,
+                headers=_obsidian_rest_headers(),
+                timeout=30,
+                verify=OBSIDIAN_VERIFY_TLS,
+            )
+            prev = gr.text if gr.status_code == 200 else ""
+            content = (prev or "") + "\n\n" + content
+        r = requests.put(
+            url,
+            data=content.encode("utf-8"),
+            headers=_obsidian_rest_headers(),
+            timeout=60,
+            verify=OBSIDIAN_VERIFY_TLS,
+        )
+        if r.status_code in (200, 204):
+            return True, "Obsidian REST OK"
+        return False, f"Obsidian REST HTTP {r.status_code}: {r.text[:200]}"
+    except Exception as e:
+        return False, str(e)
+
 
 def execute_mac_command(command: str) -> str:
     """Ejecuta un comando en la terminal de Mac de forma segura."""
@@ -130,7 +184,6 @@ def create_exercise(topic: str, content: str) -> str:
 def create_vault_note(title: str, content: str, folder: str = "") -> str:
     """Crea una nota Markdown en una carpeta específica del Vault."""
     from core.config import load_config
-    import os
     cfg = load_config()
     vault = cfg.get("vault_path")
     if not vault: return "Error: Vault no configurado."
@@ -141,15 +194,20 @@ def create_vault_note(title: str, content: str, folder: str = "") -> str:
         safe_title += ".md"
         
     target_dir = os.path.join(vault, folder) if folder else vault
+    rel_path = os.path.join(folder, safe_title) if folder else safe_title
     
     try:
-        os.makedirs(target_dir, exist_ok=True)
-        filepath = os.path.join(target_dir, safe_title)
+        if OBSIDIAN_REST_URL:
+            ok, msg = obsidian_rest_put_note(rel_path.replace("\\", "/"), content, mode="replace")
+            if not ok:
+                return f"Error Obsidian REST: {msg}"
+        else:
+            os.makedirs(target_dir, exist_ok=True)
+            filepath = os.path.join(target_dir, safe_title)
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write(content)
         
-        with open(filepath, "w", encoding="utf-8") as f:
-            f.write(content)
-        
-        # --- NUEVO: Indexar en ChromaDB inmediatamente ---
+        # --- Indexar en ChromaDB inmediatamente ---
         try:
             from core.db import get_collection
             from core.chunker import markdown_aware_chunks
@@ -157,8 +215,9 @@ def create_vault_note(title: str, content: str, folder: str = "") -> str:
             chunks = markdown_aware_chunks(content, title=title)
             if chunks:
                 ids = [f"{safe_title}_{i}" for i in range(len(chunks))]
-                metadatas = [{"title": title, "path": os.path.join(folder, safe_title) if folder else safe_title, "source": "Jarvis Tool"} for _ in chunks]
+                metadatas = [{"title": title, "path": rel_path.replace("\\", "/"), "source": "Jarvis Tool"} for _ in chunks]
                 collection.add(documents=[c["content"] for c in chunks], metadatas=metadatas, ids=ids)
+            _invalidate_bm25_after_index()
         except Exception as ex:
             print(f"Aviso: Nota creada pero no indexada: {ex}")
             
@@ -169,7 +228,6 @@ def create_vault_note(title: str, content: str, folder: str = "") -> str:
 def edit_vault_note(title: str, content: str, mode: str = "replace", folder: str = "") -> str:
     """Modifica una nota existente (reemplaza o añade al final)."""
     from core.config import load_config
-    import os
     cfg = load_config()
     vault = cfg.get("vault_path")
     if not vault: return "Error: Vault no configurado."
@@ -180,34 +238,52 @@ def edit_vault_note(title: str, content: str, mode: str = "replace", folder: str
         
     target_dir = os.path.join(vault, folder) if folder else vault
     filepath = os.path.join(target_dir, safe_title)
+    rel_path = os.path.join(folder, safe_title) if folder else safe_title
     
-    if not os.path.exists(filepath):
+    if not OBSIDIAN_REST_URL and not os.path.exists(filepath):
         return f"Error: La nota '{title}' no existe. Usá 'create_vault_note' primero."
         
     try:
-        if mode == "append":
-            with open(filepath, "a", encoding="utf-8") as f:
-                f.write("\n\n" + content)
-            msg = f"Éxito: Contenido añadido al final de '{safe_title}'."
+        if OBSIDIAN_REST_URL:
+            ok, err = obsidian_rest_put_note(rel_path.replace("\\", "/"), content, mode=mode)
+            if not ok:
+                return f"Error Obsidian REST: {err}"
+            msg = f"Éxito: Nota '{safe_title}' actualizada vía Obsidian REST."
+            full_content = content
+            if mode == "append":
+                try:
+                    gr = requests.get(
+                        f"{OBSIDIAN_REST_URL}/vault/{'/'.join(urllib.parse.quote(s, safe='') for s in rel_path.split('/'))}",
+                        headers=_obsidian_rest_headers(),
+                        timeout=30,
+                        verify=OBSIDIAN_VERIFY_TLS,
+                    )
+                    full_content = gr.text if gr.status_code == 200 else content
+                except Exception:
+                    full_content = content
         else:
-            with open(filepath, "w", encoding="utf-8") as f:
-                f.write(content)
-            msg = f"Éxito: Nota '{safe_title}' actualizada (reemplazo total)."
+            if mode == "append":
+                with open(filepath, "a", encoding="utf-8") as f:
+                    f.write("\n\n" + content)
+                msg = f"Éxito: Contenido añadido al final de '{safe_title}'."
+            else:
+                with open(filepath, "w", encoding="utf-8") as f:
+                    f.write(content)
+                msg = f"Éxito: Nota '{safe_title}' actualizada (reemplazo total)."
+            with open(filepath, "r", encoding="utf-8") as f:
+                full_content = f.read()
 
-        # --- NUEVO: Actualizar índice en ChromaDB ---
+        # --- Actualizar índice en ChromaDB ---
         try:
             from core.db import get_collection
             from core.chunker import markdown_aware_chunks
             collection = get_collection()
-            # Leer contenido completo para re-indexar
-            with open(filepath, "r", encoding="utf-8") as f:
-                full_content = f.read()
             chunks = markdown_aware_chunks(full_content, title=title)
             if chunks:
                 ids = [f"{safe_title}_{i}" for i in range(len(chunks))]
-                metadatas = [{"title": title, "path": os.path.join(folder, safe_title) if folder else safe_title, "source": "Jarvis Tool"} for _ in chunks]
-                # Upsert (add replaces if IDs match)
+                metadatas = [{"title": title, "path": rel_path.replace("\\", "/"), "source": "Jarvis Tool"} for _ in chunks]
                 collection.add(documents=[c["content"] for c in chunks], metadatas=metadatas, ids=ids)
+            _invalidate_bm25_after_index()
         except Exception as ex:
             print(f"Aviso: Nota editada pero no re-indexada: {ex}")
 

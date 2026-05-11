@@ -3,47 +3,58 @@ from core.db import get_collection
 
 def buscar_en_vault(query: str, vault_path: str, top_k: int = 5) -> list:
     """
-    Busca los fragmentos más relevantes usando RAG Avanzado (HyDE + Multi-Query).
+    Busca los fragmentos más relevantes usando RAG Avanzado (HyDE + Multi-Query condicionales).
     """
     from core.ollama import expand_query, generate_hyde_doc
+    from core.query_intent import classify_query_intent
     from core.logger import log
     
     try:
+        # 0. Truncamiento de seguridad para la query inicial (evitar colapsar embeddings)
+        query = query[:4000]
+        
         collection = get_collection()
         
-        # 1. Expansión de Consultas (Multi-Query) - Solo si la pregunta es sustancial
-        is_complex = len(query.split()) > 3
-        queries = expand_query(query) if is_complex else [query]
+        intent = classify_query_intent(query)
+        use_expansion = intent == "CONCEPT" and len(query.split()) > 3
         
-        # 2. HyDE (Solo para preguntas complejas)
-        if is_complex:
+        # 1. Expansión de Consultas (Multi-Query) — solo consultas conceptuales sustanciales
+        queries = expand_query(query) if use_expansion else [query]
+        
+        # 2. HyDE — solo conceptual (evita latencia en preguntas factuales)
+        if use_expansion:
             hyde_doc = generate_hyde_doc(query)
             queries.append(hyde_doc)
-            log(f"RAG+ activado (Multi-Query + HyDE) para: '{query[:30]}...'", "info")
+            log(f"RAG+ (CONCEPT: Multi-Query + HyDE) para: '{query[:40]}...'", "info")
+        elif intent == "FACT":
+            log(f"RAG modo FACT (sin HyDE/multi-query extra): '{query[:40]}...'", "info")
 
         # 3. Recuperación Multi-Hilo (Simulada con loop pero con deduplicación)
         all_results = []
         seen_snippets = set()
         
         for q in queries:
-            # 3A. Recuperación Semántica (ChromaDB)
-            results = collection.query(query_texts=[q], n_results=15)
-            if results['documents'] and results['documents'][0]:
-                for i in range(len(results['documents'][0])):
-                    snippet  = results['documents'][0][i]
-                    if snippet in seen_snippets: continue
-                    
-                    metadata = results['metadatas'][0][i]
-                    distance = results['distances'][0][i] if 'distances' in results and results['distances'] else 0
-                    score    = round(1.0 / (1.0 + distance), 3)
+            try:
+                # 3A. Recuperación Semántica (ChromaDB)
+                results = collection.query(query_texts=[q], n_results=15)
+                if results['documents'] and results['documents'][0]:
+                    for i in range(len(results['documents'][0])):
+                        snippet  = results['documents'][0][i]
+                        if snippet in seen_snippets: continue
+                        
+                        metadata = results['metadatas'][0][i]
+                        distance = results['distances'][0][i] if 'distances' in results and results['distances'] else 0
+                        score    = round(1.0 / (1.0 + distance), 3)
 
-                    all_results.append({
-                        "path": metadata.get("path", ""),
-                        "title": metadata.get("title", "Documento"),
-                        "snippet": snippet,
-                        "score": score
-                    })
-                    seen_snippets.add(snippet)
+                        all_results.append({
+                            "path": metadata.get("path", ""),
+                            "title": metadata.get("title", "Documento"),
+                            "snippet": snippet,
+                            "score": score
+                        })
+                        seen_snippets.add(snippet)
+            except Exception as e:
+                log(f"Aviso: Fallo en consulta RAG para variación: {e}", "warn")
 
         # 3A.2. Inyección de Texto Fundacional ("La Biblia")
         try:
@@ -76,8 +87,8 @@ def buscar_en_vault(query: str, vault_path: str, top_k: int = 5) -> list:
             bm25_res = get_bm25_top_k(query, top_k=15)
             
             if bm25_res:
-                # Fusión RRF
-                all_results = reciprocal_rank_fusion(all_results, bm25_res)
+                # Fusión RRF optimizada para bóvedas académicas (Alpha 0.45 favorece BM25)
+                all_results = reciprocal_rank_fusion(all_results, bm25_res, alpha=0.45)
                 log(f"Búsqueda Híbrida completada: {len(all_results)} candidatos fusionados.", "info")
         except Exception as e:
             log(f"Error en BM25 (cayendo a búsqueda puramente semántica): {e}", "warn")

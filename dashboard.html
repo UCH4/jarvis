@@ -119,6 +119,17 @@
       </div>
     </div>
 
+    <div class="card">
+      <div class="card-title">Manuscrito (foto de cuaderno)</div>
+      <p style="font-size:12px;color:var(--text3);margin:0 0 12px;">Subí una foto: Jarvis preprocesa (OpenCV) y transcribe con el modelo de visión configurado (MLX u Ollama).</p>
+      <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;">
+        <input type="file" id="handwriting-file" accept="image/*" />
+        <button type="button" class="btn btn-primary" id="btn-handwriting" onclick="uploadHandwriting()">Transcribir</button>
+        <span id="handwriting-status" style="font-size:11px;color:var(--text3);"></span>
+      </div>
+      <textarea id="handwriting-output" readonly rows="10" style="width:100%;margin-top:12px;font-family:var(--mono);font-size:12px;background:var(--bg-alt);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:10px;resize:vertical;" placeholder="La transcripción aparecerá aquí..."></textarea>
+    </div>
+
     <div class="metrics">
       <div class="metric"><div class="metric-val cyan"  id="m-total">0</div><div class="metric-label">PDFs encontrados</div></div>
       <div class="metric"><div class="metric-val green" id="m-created">0</div><div class="metric-label">Notas creadas</div></div>
