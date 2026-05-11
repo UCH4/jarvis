@@ -2,10 +2,25 @@
 core/db.py — Manejo de Base de Datos Vectorial (ChromaDB)
 """
 import os
+import re
 from pathlib import Path
 import chromadb
 
 from core.config import OLLAMA_URL, EMBEDDING_MODEL, EMBEDDING_DIM, CHROMA_COLLECTION
+
+
+def collection_name_for_vault(vault_path: str) -> str:
+    """
+    Deriva un nombre de colección Chroma único y estable desde el vault_path.
+    Ej: /Volumes/sd/cuatrimestral/boveda/quimicajarvis -> vault_quimicajarvis
+    """
+    if not vault_path:
+        return CHROMA_COLLECTION
+    # Usa el nombre del directorio final, sanitizado para Chroma
+    name = Path(vault_path).name
+    name = re.sub(r'[^a-zA-Z0-9_-]', '_', name).lower()
+    name = re.sub(r'_+', '_', name).strip('_')
+    return f"vault_{name}" if name else CHROMA_COLLECTION
 
 # ─── GLOBAL TIMEOUT PATCH ─────────────────────────────────────
 # ChromaDB por defecto tiene un timeout muy corto para Ollama.
@@ -66,20 +81,21 @@ def get_embedding_function():
         model_name=EMBEDDING_MODEL
     )
 
-def get_collection(name: str = None):
+def get_collection(name: str = None, vault_path: str = None):
+    """
+    Obtiene o crea la colección Chroma para el vault dado.
+    Si se pasa vault_path, deriva el nombre automáticamente (una colección por vault).
+    """
+    if vault_path:
+        name = collection_name_for_vault(vault_path)
     if name is None:
         name = CHROMA_COLLECTION
     client = get_chroma_client()
     try:
-        # Intentamos obtener la colección existente.
-        # Al pasar la función aquí, Chroma verifica si coincide.
-        # Si falla por conflicto de clase, el 'except' lo manejará.
         return client.get_collection(name=name, embedding_function=get_embedding_function())
     except Exception as e:
         if "does not exist" in str(e):
             return client.create_collection(name=name, embedding_function=get_embedding_function())
-        # Si hay conflicto de función (clase distinta), la obtenemos sin especificarla.
-        # Chroma usará la persistida internamente.
         return client.get_collection(name=name)
 
 def get_collection_client():

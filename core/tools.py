@@ -6,10 +6,10 @@ import requests
 
 from core.config import OBSIDIAN_REST_URL, OBSIDIAN_API_KEY, OBSIDIAN_VERIFY_TLS
 
-def _invalidate_bm25_after_index():
+def _invalidate_bm25_after_index(vault_path: str = None):
     try:
         from core.hybrid_search import invalidate_bm25_index
-        invalidate_bm25_index()
+        invalidate_bm25_index(vault_path)
     except Exception:
         pass
 
@@ -211,13 +211,13 @@ def create_vault_note(title: str, content: str, folder: str = "") -> str:
         try:
             from core.db import get_collection
             from core.chunker import markdown_aware_chunks
-            collection = get_collection()
+            collection = get_collection(vault_path=vault)
             chunks = markdown_aware_chunks(content, title=title)
             if chunks:
                 ids = [f"{safe_title}_{i}" for i in range(len(chunks))]
                 metadatas = [{"title": title, "path": rel_path.replace("\\", "/"), "source": "Jarvis Tool"} for _ in chunks]
                 collection.add(documents=[c["content"] for c in chunks], metadatas=metadatas, ids=ids)
-            _invalidate_bm25_after_index()
+            _invalidate_bm25_after_index(vault)
         except Exception as ex:
             print(f"Aviso: Nota creada pero no indexada: {ex}")
             
@@ -277,13 +277,13 @@ def edit_vault_note(title: str, content: str, mode: str = "replace", folder: str
         try:
             from core.db import get_collection
             from core.chunker import markdown_aware_chunks
-            collection = get_collection()
+            collection = get_collection(vault_path=vault)
             chunks = markdown_aware_chunks(full_content, title=title)
             if chunks:
                 ids = [f"{safe_title}_{i}" for i in range(len(chunks))]
                 metadatas = [{"title": title, "path": rel_path.replace("\\", "/"), "source": "Jarvis Tool"} for _ in chunks]
                 collection.add(documents=[c["content"] for c in chunks], metadatas=metadatas, ids=ids)
-            _invalidate_bm25_after_index()
+            _invalidate_bm25_after_index(vault)
         except Exception as ex:
             print(f"Aviso: Nota editada pero no re-indexada: {ex}")
 

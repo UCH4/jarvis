@@ -13,7 +13,7 @@ def buscar_en_vault(query: str, vault_path: str, top_k: int = 5) -> list:
         # 0. Truncamiento de seguridad para la query inicial (evitar colapsar embeddings)
         query = query[:4000]
         
-        collection = get_collection()
+        collection = get_collection(vault_path=vault_path)
         
         intent = classify_query_intent(query)
         use_expansion = intent == "CONCEPT" and len(query.split()) > 3
@@ -58,7 +58,7 @@ def buscar_en_vault(query: str, vault_path: str, top_k: int = 5) -> list:
 
         # 3A.2. Inyección de Texto Fundacional ("La Biblia")
         try:
-            biblia_results = collection.query(
+            biblia_results = get_collection(vault_path=vault_path).query(
                 query_texts=[query],
                 n_results=2,
                 where_document={"$contains": "#biblia"}
@@ -84,7 +84,7 @@ def buscar_en_vault(query: str, vault_path: str, top_k: int = 5) -> list:
         # 3B. Recuperación Léxica (BM25)
         try:
             from core.hybrid_search import get_bm25_top_k, reciprocal_rank_fusion
-            bm25_res = get_bm25_top_k(query, top_k=15)
+            bm25_res = get_bm25_top_k(query, vault_path=vault_path, top_k=15)
             
             if bm25_res:
                 # Fusión RRF optimizada para bóvedas académicas (Alpha 0.45 favorece BM25)

@@ -85,16 +85,12 @@ def process_single_pdf(pdf_path: str, vault_path: str, registry: dict,
 
     # 9. Inyectar en ChromaDB (Vector DB)
     try:
-        collection = get_collection()
-        # Generate context-aware chunks with title and section metadata
+        collection = get_collection(vault_path=vault_path)
         chunks = markdown_aware_chunks(full_text, title=analysis.get("titulo", p.stem))
-        # Extract just the content for vector store
         chunk_texts = [c["content"] for c in chunks]
         if chunks:
-            # Identificadores únicos para cada chunk
             ids = [f"{note_path.stem}_{i}" for i in range(len(chunks))]
             rel_path = str(note_path.relative_to(Path(vault_path)))
-            # Include section info from each chunk's metadata
             metadatas = [{"title": title,
                          "section": c.get("section", ""),
                          "path": rel_path,
@@ -103,7 +99,7 @@ def process_single_pdf(pdf_path: str, vault_path: str, registry: dict,
         log(f"Vectorizados {len(chunks)} fragmentos en ChromaDB", "info")
         try:
             from core.hybrid_search import invalidate_bm25_index
-            invalidate_bm25_index()
+            invalidate_bm25_index(vault_path)
         except Exception:
             pass
     except Exception as e:

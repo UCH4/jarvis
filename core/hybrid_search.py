@@ -3,70 +3,79 @@ from core.db import get_collection
 from core.logger import log
 import time
 
-_bm25_index = None
-_bm25_corpus = []
-_bm25_metadatas = []
+# Índice BM25 por vault: { vault_path -> {index, corpus, metadatas} }
+_bm25_cache: dict = {}
 
 
-def invalidate_bm25_index():
-    """Fuerza reconstrucción del índice BM25 tras cambios en Chroma."""
-    global _bm25_index, _bm25_corpus, _bm25_metadatas
-    _bm25_index = None
-    _bm25_corpus = []
-    _bm25_metadatas = []
+def invalidate_bm25_index(vault_path: str = None):
+    """Fuerza reconstrucción del índice BM25 para el vault dado (o todos si no se especifica)."""
+    global _bm25_cache
+    if vault_path:
+        _bm25_cache.pop(vault_path, None)
+    else:
+        _bm25_cache.clear()
 
 
-def build_bm25_index(force=False):
-    global _bm25_index, _bm25_corpus, _bm25_metadatas
-    
-    if _bm25_index is not None and not force:
+
+def build_bm25_index(vault_path: str, force: bool = False):
+    global _bm25_cache
+
+    if vault_path in _bm25_cache and not force:
         return
-        
+
     log("Construyendo índice BM25 para Búsqueda Híbrida...", "info")
     t0 = time.time()
-    
-    collection = get_collection()
-    data = collection.get() # Obtiene todos los documentos
-    
+
+    collection = get_collection(vault_path=vault_path)
+    data = collection.get()
+
     docs = data.get("documents", [])
     if not docs:
         log("BM25: No hay documentos en la base de datos.", "warn")
         return
-        
-    _bm25_corpus = docs
-    _bm25_metadatas = data.get("metadatas", [])
-    
-    # Tokenización simple por espacios y paso a minúsculas
+
+    metadatas = data.get("metadatas", [])
     tokenized_corpus = [doc.lower().split() for doc in docs]
-    _bm25_index = BM25Okapi(tokenized_corpus)
-    
+    index = BM25Okapi(tokenized_corpus)
+
+    _bm25_cache[vault_path] = {
+        "index":     index,
+        "corpus":    docs,
+        "metadatas": metadatas,
+    }
+
     t1 = time.time()
     log(f"✅ Índice BM25 listo: {len(docs)} fragmentos indexados en {t1-t0:.2f}s", "info")
 
-def get_bm25_top_k(query: str, top_k: int = 15):
-    global _bm25_index, _bm25_corpus, _bm25_metadatas
-    
-    if _bm25_index is None:
-        build_bm25_index()
-        if _bm25_index is None:
+
+def get_bm25_top_k(query: str, vault_path: str, top_k: int = 15):
+    global _bm25_cache
+
+    if vault_path not in _bm25_cache:
+        build_bm25_index(vault_path)
+        if vault_path not in _bm25_cache:
             return []
-            
+
+    entry = _bm25_cache[vault_path]
+    bm25_index = entry["index"]
+    bm25_corpus = entry["corpus"]
+    bm25_metadatas = entry["metadatas"]
+
     tokenized_query = query.lower().split()
-    scores = _bm25_index.get_scores(tokenized_query)
-    
-    # Obtener los índices de los top_k
+    scores = bm25_index.get_scores(tokenized_query)
+
     top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
-    
+
     results = []
     for idx in top_indices:
         if scores[idx] <= 0:
             continue
         results.append({
-            "snippet": _bm25_corpus[idx],
-            "metadata": _bm25_metadatas[idx] if idx < len(_bm25_metadatas) else {},
+            "snippet": bm25_corpus[idx],
+            "metadata": bm25_metadatas[idx] if idx < len(bm25_metadatas) else {},
             "bm25_score": scores[idx]
         })
-        
+
     return results
 
 def reciprocal_rank_fusion(semantic_results, bm25_results, k=60, alpha=0.5):

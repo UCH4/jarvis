@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
 Reconstruye la colección Chroma desde todas las notas .md del vault.
-Útil al cambiar JARVIS_EMBED / JARVIS_CHROMA_COLLECTION / dimensión.
+Cada vault tiene su propia colección derivada automáticamente de su path.
 
 Uso:
-  export JARVIS_CHROMA_COLLECTION=vault_notes_bge_m3
+  python scripts/reindex_vault_chroma.py
+
+Opcional (para sobreescribir embedding):
   export JARVIS_EMBED=bge-m3
   export JARVIS_EMBED_DIM=1024
-  python scripts/reindex_vault_chroma.py
 """
 from __future__ import annotations
 
@@ -19,8 +20,8 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from core.config import load_config, CHROMA_COLLECTION  # noqa: E402
-from core.db import get_chroma_client, get_embedding_function  # noqa: E402
+from core.config import load_config  # noqa: E402
+from core.db import get_chroma_client, get_embedding_function, collection_name_for_vault  # noqa: E402
 from core.chunker import markdown_aware_chunks  # noqa: E402
 
 
@@ -35,15 +36,20 @@ def main() -> None:
         print(f"Vault no existe: {vault_p}")
         sys.exit(1)
 
+    # Derivar nombre de colección desde el vault path (igual que el pipeline principal)
+    col_name = collection_name_for_vault(str(vault_p))
+    print(f"Vault:     {vault_p}")
+    print(f"Colección: {col_name}")
+
     client = get_chroma_client()
     try:
-        client.delete_collection(CHROMA_COLLECTION)
-        print(f"Colección eliminada: {CHROMA_COLLECTION}")
+        client.delete_collection(col_name)
+        print(f"Colección eliminada: {col_name}")
     except Exception as e:
         print(f"Aviso al borrar colección: {e}")
 
     ef = get_embedding_function()
-    col = client.create_collection(name=CHROMA_COLLECTION, embedding_function=ef)
+    col = client.create_collection(name=col_name, embedding_function=ef)
 
     n_docs = 0
     for md in sorted(vault_p.rglob("*.md")):
@@ -71,7 +77,7 @@ def main() -> None:
         )
         n_docs += len(chunks)
 
-    print(f"Reindex OK: {CHROMA_COLLECTION}, fragmentos={n_docs}")
+    print(f"Reindex OK: {col_name}, fragmentos={n_docs}")
 
 
 if __name__ == "__main__":
