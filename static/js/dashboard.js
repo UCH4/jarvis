@@ -765,10 +765,59 @@ function switchView(name, el) {
     loadVaultStats();
     loadVaultFiles();
   }
-  if (name === 'settings') loadNetworkInfo();
+  if (name === 'settings') {
+    loadNetworkInfo();
+    refreshHealth();
+  }
   if (name === 'chat')     document.getElementById('chat-input').focus();
   if (name === 'grafo')    loadGraph();
 }
+
+async function refreshHealth() {
+  const grid = document.getElementById('health-grid');
+  if (!grid) return;
+  grid.innerHTML = '<div class="empty" style="padding: 20px;"><div class="spin">◌</div><div>Verificando modelos por subtarea...</div></div>';
+  
+  try {
+    const r = await fetch(`${API}/models/health`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const health = await r.json();
+    
+    const taskLabels = {
+      pdf_metadata: "📄 PDF Metadata", 
+      chat: "💬 Chat", 
+      chat_concise: "⚡ Quick",
+      reasoning: "🧠 Razonamiento", 
+      vision: "👁️ Visión", 
+      hyde: "🔍 HyDE",
+      multi_query: "🔀 Multi-Query", 
+      intent_classify: "🏷️ Intent",
+      professor: "🎓 Professor", 
+      flashcards: "🃏 Flashcards",
+      embed: "📐 Embeddings", 
+      rerank: "📊 Rerank"
+    };
+    
+    grid.innerHTML = Object.entries(health).map(([task, info]) => {
+      const label = taskLabels[task] || task;
+      const statusClass = info.status || 'missing';
+      const statusLabel = statusClass.toUpperCase();
+      const noteHtml = info.note ? `<div class="health-note">${info.note}</div>` : '';
+      
+      return `
+        <div class="health-card ${statusClass}">
+          <div class="task-name">${label}</div>
+          <div class="model-name" title="${info.model}">${info.model} (${info.provider})</div>
+          <span class="status-badge">${statusLabel}</span>
+          ${noteHtml}
+        </div>
+      `;
+    }).join('');
+  } catch (e) {
+    grid.innerHTML = `<div class="empty" style="padding: 20px; color: var(--red);">Error al verificar la salud de los modelos: ${e.message}</div>`;
+  }
+}
+
 
 async function loadGraph() {
   const container = document.getElementById('knowledge-graph');

@@ -51,38 +51,46 @@ def detect_intention(query: str) -> str:
     
     return "general"
 
-def get_dynamic_model_config(query: str, manual_mode: str = None) -> dict:
-    """Retorna la configuración completa según la intención detectada y modelos instalados."""
-    from core.ollama import get_available_models
-    available = get_available_models()
+def get_dynamic_model_config(query: str, manual_mode: str = None, user_override: str = None) -> dict:
+    """Retorna la configuración completa según la intención detectada y el orchestrator."""
+    from core.model_orchestrator import resolve, Task
     
     intention = detect_intention(query)
     
-    # Lógica de "Mejor de su clase" (PVP Automático)
-    if intention == "vision":
-        # Priorizar llama3.2-vision si está disponible
-        if any("vision" in m for m in available):
-            return AI_STRATEGIES["vision"]
-            
-    if intention == "reasoning":
-        # Priorizar DeepSeek-R1 solo si está explícitamente habilitado (consume mucha memoria)
-        if ENABLE_HEAVY_REASONING and any("deepseek-r1" in m for m in available):
-            return AI_STRATEGIES["reasoning"]
-        # Modo seguro por defecto: Llama 3.1 8B MLX
-        return AI_STRATEGIES["general"]
-            
-    if intention == "concise":
-        # Priorizar Gemma 2 para resúmenes (si ya terminó de descargar)
-        if any("gemma2" in m for m in available):
-            cfg = AI_STRATEGIES["concise"].copy()
-            cfg["model"] = "gemma2:9b"
-            cfg["provider"] = "ollama"
-            return cfg
-    
-    # Respetar modo profesor
-    if manual_mode == "professor":
-        if ENABLE_HEAVY_REASONING and any("deepseek-r1" in m for m in available):
-            return AI_STRATEGIES["reasoning"]
+    # 1. Mapear manual_mode o intención a Task
+    if manual_mode == "quick":
+        task = Task.CHAT_CONCISE
+        system_prompt = "Sos un asistente de respuesta rápida y ejecutiva. Respondé de forma ultra-concisa, usando bullet points y máximo 100 palabras."
+    elif manual_mode == "professor":
+        task = Task.PROFESSOR
+        from agents.professor import SOCRATIC_SYSTEM_PROMPT
+        system_prompt = SOCRATIC_SYSTEM_PROMPT
+    elif manual_mode == "deep_context":
+        task = Task.CHAT
+        system_prompt = "Sos JARVIS, un Knowledge Architect académico. Brindá respuestas detalladas y fundamentadas en el Vault."
+    else:
+        # Si no hay manual_mode, o es normal, decidimos por intención detectada
+        if intention == "vision":
+            task = Task.VISION
+            system_prompt = "Sos un experto en transcripción y análisis visual. Describí y transcribí el contenido de la imagen con precisión."
+        elif intention == "reasoning":
+            task = Task.REASONING
+            system_prompt = "Sos un experto en razonamiento lógico y académico. Analizá paso a paso, resolviendo dudas complejas con rigor científico."
+        elif intention == "concise":
+            task = Task.CHAT_CONCISE
+            system_prompt = "Sos un asistente de respuesta rápida y ejecutiva. Respondé de forma ultra-concisa, usando bullet points y máximo 100 palabras."
+        else:
+            task = Task.CHAT
+            system_prompt = "Sos JARVIS, un Knowledge Architect académico. Brindá respuestas detalladas y fundamentadas en el Vault."
 
-    # Fallback por defecto: MLX (Llama 3.1 8B) por velocidad pura en M4
-    return AI_STRATEGIES.get(intention, AI_STRATEGIES["general"])
+    # 2. Resolver con el orchestrator
+    spec = resolve(task, user_override=user_override)
+    
+    # Ajustes finos basados en intención/modo
+    if manual_mode == "deep_context":
+        spec["temperature"] = 0.3 # Bajar temperatura para precisión/contexto profundo
+
+    spec["system_prompt"] = system_prompt
+    spec["intent"] = intention
+    
+    return spec

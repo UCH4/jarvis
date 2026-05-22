@@ -290,6 +290,17 @@
       </div>
     </div>
 
+    <!-- Model Health Panel -->
+    <div class="card" id="model-health-panel" style="margin-bottom: 20px;">
+      <div class="card-title">🧠 Estado de Modelos por Subtarea</div>
+      <div id="health-grid" class="health-grid">
+        <!-- Populated by JS -->
+      </div>
+      <button onclick="refreshHealth()" class="btn btn-ghost" style="font-size:11px;padding:6px 12px;margin-top:10px;">
+        <span>↻</span> Verificar Salud
+      </button>
+    </div>
+
     <div class="card">
       <div class="card-title">Preferencias del Modelo</div>
       <div class="form-row">

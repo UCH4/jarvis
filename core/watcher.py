@@ -14,7 +14,13 @@ class VaultWatcher:
         
     def _get_files(self):
         try:
-            return {f for f in os.listdir(self.scan_path) if f.lower().endswith('.pdf') and not f.startswith('._')}
+            pdfs = set()
+            for root, _, files in os.walk(self.scan_path):
+                for f in files:
+                    if f.lower().endswith('.pdf') and not f.startswith('._'):
+                        rel_path = os.path.relpath(os.path.join(root, f), self.scan_path)
+                        pdfs.add(rel_path)
+            return pdfs
         except Exception:
             return set()
 

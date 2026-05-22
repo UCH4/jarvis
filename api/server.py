@@ -388,6 +388,12 @@ try:
             vault_path = load_config().get("vault_path", "")
         return jsonify(get_vault_graph(vault_path))
 
+    @app.route("/api/models/health", methods=["GET"])
+    def api_models_health():
+        """Estado de disponibilidad de modelos por subtarea."""
+        from core.model_orchestrator import get_health
+        return jsonify(get_health())
+
     # ─── Estáticos ────────────────────────────────────────────
     @app.route("/static/<path:filename>")
     def static_files(filename):

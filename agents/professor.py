@@ -5,11 +5,23 @@ import json
 import re
 import requests
 from core.config import OLLAMA_URL, ANALYSIS_MODEL
+from core.model_orchestrator import resolve, Task
+from core.ollama import generate_response
 
 SOCRATIC_SYSTEM_PROMPT = """Actúa como un Tutor Socrático. Tu base de conocimientos son las notas de Obsidian provistas. 
 Nunca des la respuesta final de inmediato. Si el usuario pregunta algo, revisa sus notas, identifica qué concepto básico le falta 
 y genera un ejercicio práctico de 2 minutos para validar que lo entiende antes de avanzar. 
 Tu tono debe ser inspirador, paciente y académico."""
+
+def _call_model(prompt: str, task: Task) -> str:
+    spec = resolve(task)
+    return generate_response(
+        prompt=prompt,
+        model=spec["model"],
+        temperature=spec["temperature"],
+        max_tokens=spec["max_tokens"],
+        is_json=True
+    )
 
 def generate_exercise(topic: str, context: str, difficulty: str = "Intermedio") -> dict:
     """Genera un ejercicio basado en el contexto de las notas."""
@@ -38,18 +50,8 @@ FORMATO JSON:
         )
 
     try:
-        r = requests.post(
-            f"{OLLAMA_URL}/api/generate",
-            json={
-                "model": ANALYSIS_MODEL,
-                "prompt": prompt,
-                "stream": False,
-                "format": "json",
-                "options": {"temperature": 0.7}
-            },
-            timeout=120
-        )
-        data = json.loads(r.json().get("response", "{}"))
+        response = _call_model(prompt, Task.PROFESSOR)
+        data = json.loads(response)
         if not isinstance(data, dict):
             raise ValueError("Formato inválido de ejercicio")
         # Normalización para evitar que el frontend falle por claves faltantes
@@ -81,17 +83,7 @@ FORMATO JSON (Lista de objetos):
 ]"""
 
     try:
-        r = requests.post(
-            f"{OLLAMA_URL}/api/generate",
-            json={
-                "model": ANALYSIS_MODEL,
-                "prompt": prompt,
-                "stream": False,
-                "format": "json",
-                "options": {"temperature": 0.6}
-            },
-            timeout=60
-        )
-        return json.loads(r.json().get("response", "[]"))
+        response = _call_model(prompt, Task.FLASHCARDS)
+        return json.loads(response)
     except Exception:
         return []

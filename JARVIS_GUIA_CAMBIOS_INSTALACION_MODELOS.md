@@ -147,4 +147,48 @@ JARVIS_AUTO_NOUGAT=0|1
 
 ---
 
+## 6. Model Orchestrator (Orquestación por Subtarea)
+
+El sistema centraliza la selección de cerebros de IA en un orquestador único (`core/model_orchestrator.py`). Esto evita la dispersión de modelos hardcodeados y garantiza que cada llamada LLM se realice con el modelo y proveedor más adecuado.
+
+### 6.1 Matriz de Tareas y Valores por Defecto
+
+El orquestador divide el trabajo de Jarvis en las siguientes subtareas configuradas en `core/config.py`:
+
+| Tarea (`Task`) | Rol / Descripción | Modelo por Defecto | Proveedor | Fallback |
+|---|---|---|---|---|
+| `pdf_metadata` | Extrae metadatos estructurados en JSON del PDF | `qwen2.5:14b` | Ollama | Ninguno |
+| `chat` | Respuestas del chat en modo RAG | `qwen2.5:14b` | Ollama | Ninguno |
+| `chat_concise` | Respuestas ejecutivas y resúmenes rápidos | `gemma2:9b` | Ollama | `qwen2.5:14b` |
+| `reasoning` | Razonamiento lógico avanzado y CoT | `deepseek-r1:14b` | Ollama | `qwen2.5:14b` |
+| `vision` | Transcripción de PDF y manuscritos (OCR) | `mlx-community/Qwen2-VL-2B-Instruct-4bit` (o `llama3.2-vision` si es Ollama) | `mlx` o `ollama` | `llama3.2-vision` |
+| `hyde` | Generación de documentos hipotéticos para RAG | `mlx-community/Meta-Llama-3.1-8B-Instruct-4bit` | `mlx` | `qwen2.5:14b` |
+| `multi_query` | Expansión de consultas a sinónimos académicos | `mlx-community/Meta-Llama-3.1-8B-Instruct-4bit` | `mlx` | `qwen2.5:14b` |
+| `intent_classify` | Clasifica la consulta (FACT vs CONCEPT) | `mlx-community/Meta-Llama-3.1-8B-Instruct-4bit` | `mlx` | `qwen2.5:14b` |
+| `professor` | Tutoría socrática y ejercicios interactivos | `qwen2.5:14b` | Ollama | Ninguno |
+| `flashcards` | Genera tarjetas de estudio en formato JSON | `gemma2:9b` | Ollama | `qwen2.5:14b` |
+| `embed` | Embeddings vectoriales para Chroma | `bge-m3` | Ollama | Ninguno |
+| `rerank` | Reranking final de fragmentos RAG | `BAAI/bge-reranker-base` | `cross_encoder` o `listwise` | Ninguno |
+
+### 6.2 Prioridad en la Selección de Modelos
+
+Cuando el sistema ejecuta una subtarea, resuelve el modelo siguiendo este orden de prioridad:
+1. **User Override (Tiempo de Ejecución):** El modelo seleccionado en los dropdowns del chat.
+2. **State Overrides (`state.json`):** Mapeado en la base de datos de estado `task_overrides`.
+3. **Model Registry Default:** Los valores por defecto descritos en la sección 6.1.
+
+### 6.3 Monitoreo y Verificación de Salud (Health Checks)
+
+El dashboard cuenta con un panel en la pestaña **Configuración** llamado **Estado de Modelos por Subtarea**. Muestra en tiempo real el estado de cada modelo en la matriz:
+- **`OK` (Verde):** El modelo y el motor correspondiente están disponibles y listos.
+- **`FALLBACK` (Amarillo):** El modelo principal no está disponible, pero el orquestador seleccionó con éxito el fallback (ej. si `gemma2:9b` no está descargado, redirige a `qwen2.5:14b`).
+- **`MISSING` (Rojo):** La librería requerida no está instalada (ej. `mlx-lm` para MLX) o el modelo de Ollama no se encuentra localmente. El panel muestra la nota explicativa con el comando de descarga exacto.
+
+### 6.4 Auditoría de Logs Unificada
+
+Todas las llamadas a modelos de IA escriben en el log de la terminal con el siguiente patrón:
+`🧠 Orchestrator: task='nombre_tarea' -> model='nombre_modelo' (proveedor)`
+
+---
+
 Fin del documento. Mantener este archivo en el repo como referencia única de despliegue.

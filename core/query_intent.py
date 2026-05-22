@@ -66,7 +66,8 @@ def classify_query_intent(query: str, use_llm: bool = True) -> Intent:
         return "FACT"
 
     try:
-        from core.mlx_inference import generate_text
+        from core.model_orchestrator import resolve, Task
+        spec = resolve(Task.INTENT_CLASSIFY)
         prompt = (
             f'Clasificá la consulta en UNA palabra: FACT o CONCEPT.\n'
             f'- FACT: dato puntual, fecha, cita, página, quién/cuándo/cuánto.\n'
@@ -74,7 +75,13 @@ def classify_query_intent(query: str, use_llm: bool = True) -> Intent:
             f'Consulta: "{q[:500]}"\n'
             f'Respondé solo: FACT o CONCEPT'
         )
-        out = generate_text(prompt, max_tokens=8, temperature=0.0).strip().upper()
+        if spec["provider"] == "mlx":
+            from core.mlx_inference import generate_text
+            out = generate_text(prompt, model_name=spec["model"], max_tokens=spec["max_tokens"], temperature=spec["temperature"]).strip().upper()
+        else:
+            from core.ollama import generate_response
+            out = generate_response(prompt, spec["model"], temperature=spec["temperature"], max_tokens=spec["max_tokens"]).strip().upper()
+            
         if "CONCEPT" in out:
             return "CONCEPT"
     except Exception:

@@ -46,9 +46,45 @@ def get_vision_model():
     return None
 
 
+def generate_response(prompt: str, model: str, temperature: float = 0.7, max_tokens: int = 2048, is_json: bool = False) -> str:
+    """
+    Wrapper no-streaming sobre la API de Ollama, protegido por gpu_lock.
+    """
+    with gpu_lock("Ollama Generate"):
+        try:
+            payload = {
+                "model": model,
+                "prompt": prompt,
+                "stream": False,
+                "options": {
+                    "temperature": temperature,
+                    "num_ctx": 8192,
+                    "num_thread": 8
+                }
+            }
+            if max_tokens:
+                payload["options"]["num_predict"] = max_tokens
+            if is_json:
+                payload["format"] = "json"
+
+            r = requests.post(
+                f"{OLLAMA_URL}/api/generate",
+                json=payload,
+                timeout=180,
+            )
+            return r.json().get("response", "").strip()
+        except Exception as e:
+            from core.logger import log
+            log(f"Error in generate_response: {e}", "error")
+            return ""
+
+
 # ─── Embeddings ───────────────────────────────────────────────
 
 def get_embedding(text: str) -> list:
+    from core.model_orchestrator import Task
+    from core.logger import log
+    log(f"🧠 Orchestrator: task='{Task.EMBED}' -> model='{EMBEDDING_MODEL}' (ollama)", "info")
     with gpu_lock("Ollama Embedding"):
         try:
             r = requests.post(
@@ -79,6 +115,10 @@ def ocr_page_vision(page, vision_model: str, page_num: int) -> str:
     Renderiza una página PDF como imagen y la manda al modelo de visión.
     Optimizado para M4 Pro y previene timeouts.
     """
+    from core.model_orchestrator import resolve, Task
+    spec = resolve(Task.VISION)
+    model = vision_model or spec["model"]
+
     with gpu_lock("Ollama Vision OCR"):
         try:
             # Usamos un DPI balanceado para velocidad y precisión
@@ -98,7 +138,7 @@ def ocr_page_vision(page, vision_model: str, page_num: int) -> str:
             r = requests.post(
                 f"{OLLAMA_URL}/api/generate",
                 json={
-                    "model":  vision_model,
+                    "model":  model,
                     "prompt": prompt,
                     "images": [img_b64],
                     "stream": False,
@@ -128,7 +168,7 @@ def ocr_page_vision(page, vision_model: str, page_num: int) -> str:
                 r2 = requests.post(
                     f"{OLLAMA_URL}/api/generate",
                     json={
-                        "model":  vision_model,
+                        "model":  model,
                         "prompt": prompt2,
                         "images": [img_b64],
                         "stream": False,
@@ -149,7 +189,10 @@ def ocr_page_vision(page, vision_model: str, page_num: int) -> str:
 
 def ocr_image_png_bytes(png_bytes: bytes, prompt: str, vision_model: str) -> str:
     """OCR / transcripción de una imagen PNG en memoria vía Ollama."""
-    if not vision_model:
+    from core.model_orchestrator import resolve, Task
+    spec = resolve(Task.VISION)
+    model = vision_model or spec["model"]
+    if not model:
         return ""
     with gpu_lock("Ollama Vision Image"):
         try:
@@ -157,7 +200,7 @@ def ocr_image_png_bytes(png_bytes: bytes, prompt: str, vision_model: str) -> str
             r = requests.post(
                 f"{OLLAMA_URL}/api/generate",
                 json={
-                    "model": vision_model,
+                    "model": model,
                     "prompt": prompt,
                     "images": [img_b64],
                     "stream": False,
@@ -182,13 +225,19 @@ def expand_query(query: str) -> list:
         f"Dada la consulta: '{query}', genera 2 variaciones de búsqueda que usen terminología académica técnica. "
         "Responde solo con las 2 variaciones, una por línea."
     )
+    from core.model_orchestrator import resolve, Task
+    spec = resolve(Task.MULTI_QUERY)
+    
     try:
-        from core.mlx_inference import generate_text
-        text = generate_text(prompt, max_tokens=60, temperature=0.2)
+        if spec["provider"] == "mlx":
+            from core.mlx_inference import generate_text
+            text = generate_text(prompt, model_name=spec["model"], max_tokens=spec["max_tokens"], temperature=spec["temperature"])
+        else:
+            text = generate_response(prompt, spec["model"], temperature=spec["temperature"], max_tokens=spec["max_tokens"])
         return [query] + [v.strip("- ").strip() for v in text.split("\n") if v.strip()][:2]
     except Exception as e:
         from core.logger import log
-        log(f"Error expand_query MLX: {e}", "warn")
+        log(f"Error expand_query: {e}", "warn")
         return [query]
 
 def generate_hyde_doc(query: str) -> str:
@@ -197,20 +246,28 @@ def generate_hyde_doc(query: str) -> str:
         f"Escribe un párrafo técnico y denso en información que podrías encontrar en un apunte universitario sobre: {query}. "
         "Usa lenguaje formal y conceptos clave. No saludes, no expliques, solo escribe el apunte."
     )
+    from core.model_orchestrator import resolve, Task
+    spec = resolve(Task.HYDE)
+    
     try:
-        from core.mlx_inference import generate_text
-        text = generate_text(prompt, max_tokens=150, temperature=0.1)
+        if spec["provider"] == "mlx":
+            from core.mlx_inference import generate_text
+            text = generate_text(prompt, model_name=spec["model"], max_tokens=spec["max_tokens"], temperature=spec["temperature"])
+        else:
+            text = generate_response(prompt, spec["model"], temperature=spec["temperature"], max_tokens=spec["max_tokens"])
         return text
     except Exception as e:
         from core.logger import log
-        log(f"Error generate_hyde_doc MLX: {e}", "warn")
+        log(f"Error generate_hyde_doc: {e}", "warn")
         return query
 
 def analyze_content(text: str, existing_topics: list = None, model: str = None) -> dict:
     """
     Analiza el contenido del PDF y devuelve metadatos estructurados en JSON.
     """
-    m = model or ANALYSIS_MODEL
+    from core.model_orchestrator import resolve, Task
+    spec = resolve(Task.PDF_METADATA)
+    m = model or spec["model"]
     existing_str = ", ".join(existing_topics[:30]) if existing_topics else "ninguno aún"
 
     prompt = f"""Eres un Agente de Inteligencia Académica de Grado Superior especializado en Clasificación y Arquitectura de Conocimiento.
@@ -306,8 +363,8 @@ def chat_con_vault(question: str, vault_path: str, model: str = None, mode: str 
     from core.router import get_dynamic_model_config
     from core.rag import buscar_en_vault
     
-    # 0. Selección dinámica de cerebro
-    ai_cfg = get_dynamic_model_config(question, mode)
+    # 0. Selección dinámica de cerebro (pasando 'model' como user_override)
+    ai_cfg = get_dynamic_model_config(question, mode, user_override=model)
     m = ai_cfg["model"]
     provider = ai_cfg["provider"]
     system_prompt_dynamic = ai_cfg["system_prompt"]
@@ -435,26 +492,27 @@ def chat_con_vault(question: str, vault_path: str, model: str = None, mode: str 
 
                     prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
                     
-                    for chunk_obj in mlx_lm.stream_generate(model_obj, tokenizer, prompt, max_tokens=2048):
-                        chunk_text = chunk_obj.text
-                        response_text += chunk_text
-                        
-                        if len(response_text) < 10 and response_text.strip().startswith("{"):
-                            is_json_tool = True
-                            continue
+                    with gpu_lock(f"MLX Stream ({m})"):
+                        for chunk_obj in mlx_lm.stream_generate(model_obj, tokenizer, prompt, max_tokens=2048):
+                            chunk_text = chunk_obj.text
+                            response_text += chunk_text
                             
-                        if not is_json_tool:
-                            if len(response_text) == len(chunk_text):
-                                chunk_text = re.sub(r'^(Respuesta|Jarvis|Assistant|JARVIS):\s*', '', chunk_text, flags=re.I)
-                            
-                            clean_chunk = chunk_text.strip()
-                            if clean_chunk.startswith("{") or ("\"name\"" in response_text and "{" in response_text):
+                            if len(response_text) < 10 and response_text.strip().startswith("{"):
                                 is_json_tool = True
                                 continue
+                                
+                            if not is_json_tool:
+                                if len(response_text) == len(chunk_text):
+                                    chunk_text = re.sub(r'^(Respuesta|Jarvis|Assistant|JARVIS):\s*', '', chunk_text, flags=re.I)
+                                
+                                clean_chunk = chunk_text.strip()
+                                if clean_chunk.startswith("{") or ("\"name\"" in response_text and "{" in response_text):
+                                    is_json_tool = True
+                                    continue
 
-                            if chunk_text:
-                                full_answer += chunk_text
-                                yield json.dumps({"type": "chunk", "content": chunk_text}) + "\n"
+                                if chunk_text:
+                                    full_answer += chunk_text
+                                    yield json.dumps({"type": "chunk", "content": chunk_text}) + "\n"
                 else:
                     # ── PROVEEDOR OLLAMA (Dinamismo) ──
                     payload = {
@@ -466,16 +524,17 @@ def chat_con_vault(question: str, vault_path: str, model: str = None, mode: str 
                     if active_tools:
                         payload["tools"] = active_tools
 
-                    r = requests.post(f"{OLLAMA_URL}/api/chat", json=payload, stream=True, timeout=120)
-                    for line in r.iter_lines():
-                        if line:
-                            chunk = json.loads(line)
-                            if "message" in chunk:
-                                content = chunk["message"].get("content", "")
-                                response_text += content
-                                if content:
-                                    full_answer += content
-                                    yield json.dumps({"type": "chunk", "content": content}) + "\n"
+                    with gpu_lock(f"Ollama Stream ({m})"):
+                        r = requests.post(f"{OLLAMA_URL}/api/chat", json=payload, stream=True, timeout=120)
+                        for line in r.iter_lines():
+                            if line:
+                                chunk = json.loads(line)
+                                if "message" in chunk:
+                                    content = chunk["message"].get("content", "")
+                                    response_text += content
+                                    if content:
+                                        full_answer += content
+                                        yield json.dumps({"type": "chunk", "content": content}) + "\n"
                             if "tool_calls" in chunk:
                                 # Ollama maneja tool_calls estructurados
                                 is_json_tool = True
